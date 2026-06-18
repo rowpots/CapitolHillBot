@@ -632,7 +632,8 @@ export default class SnapBot {
   }
 
   async findTitleSpanOnCurrentView(chatId, maxScrollAttempts = 40) {
-    const targetId = `title-${chatId}`;
+    const normalizedChatId = this.normalizeChatId(chatId);
+    const targetId = `title-${normalizedChatId}`;
     await this.resetScrollableContainersToTop();
 
     for (let attempt = 0; attempt <= maxScrollAttempts; attempt += 1) {
@@ -1088,6 +1089,18 @@ export default class SnapBot {
   }
 
   isDetachedFrameError(error) {
-    return String(error?.message ?? "").includes("detached Frame");
+    const message = String(error?.message ?? "");
+    return (
+      message.includes("detached Frame") ||
+      message.includes("Execution context was destroyed")
+    );
+  }
+
+  normalizeChatId(chatId) {
+    return String(chatId ?? "")
+      .trim()
+      .replace(/^id=["']?/i, "")
+      .replace(/["']$/i, "")
+      .replace(/^title-/i, "");
   }
 }

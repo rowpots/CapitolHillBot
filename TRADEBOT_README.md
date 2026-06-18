@@ -14,6 +14,7 @@ It is built on top of SnapBot, but this guide is for the custom trade bot behavi
 - Adds history lines:
   - `This is the Xth trade of the season.`
   - `This is the Yth time Team A and Team B have traded.`
+- Sends a weekly Tuesday standings report for Weeks 1-14 with playoff odds
 - Optionally sends a separate roast message after a lopsided trade
 - Lets you queue a fake trade message for testing without making a real Sleeper trade
 
@@ -56,6 +57,7 @@ These are the important ones:
 - `USER_PASSWORD`: Snapchat bot account password
 - `SLEEPER_LEAGUE_ID`: league to watch
 - `SNAPCHAT_GROUP_CHAT_ID`: chat to post in
+- `TEST_SNAPCHAT_GROUP_CHAT_ID`: optional separate chat id for one-off testing
 - `POLL_INTERVAL_MS`: how often to check Sleeper, default `60000`
 - `SNAPCHAT_STARTUP_TIMEOUT_MS`: how long to wait for Snapchat Web to show either login or chats on startup, default `120000`
 - `SNAPCHAT_LOGIN_TIMEOUT_MS`: how long to keep the browser open while login, 2FA, or verification finishes, default `600000`
@@ -64,6 +66,9 @@ These are the important ones:
 - `DYNASTY_VALUE_MODE`: `auto`, `1qb`, or `2qb`
 - `ROAST_MODE`: `true` or `false`
 - `ROAST_THRESHOLD`: higher number means fewer roasts
+- `WEEKLY_REPORTS_ENABLED`: `true` or `false`, default `true`
+- `WEEKLY_REPORT_SEND_HOUR_ET`: Tuesday send hour in Eastern time, default `10`
+- `WEEKLY_REPORT_SIMULATION_COUNT`: Monte Carlo runs for playoff odds, default `10000`
 - `HEADLESS`: `false` is easier for debugging
 - `DRY_RUN`: `true` logs instead of sending to Snapchat
 - `RUN_ONCE`: `true` checks once and exits
@@ -91,6 +96,23 @@ Queue a fake trade without a roast:
 npm run test-trade -- --no-roast
 ```
 
+Preview a weekly standings message without posting to Snapchat:
+
+```bash
+npm run preview-weekly-report -- --previous --week 14
+```
+
+Send a weekly standings test to a separate Snapchat group chat:
+
+```bash
+npm run preview-weekly-report -- --previous --week 14 --send --chat-id 'id="title-712a89c2-d7a6-4686-9aad-af62571be8ec"'
+```
+
+You can pass either:
+
+- the raw chat id like `712a89c2-d7a6-4686-9aad-af62571be8ec`
+- the full DOM id form like `id="title-712a89c2-d7a6-4686-9aad-af62571be8ec"`
+
 Run one dry check without posting to Snapchat:
 
 ```bash
@@ -108,6 +130,27 @@ On startup, the bot:
 5. Sends only trades it has not already seen
 
 The sent trade ids are stored in `.state/runtime-state.json`.
+
+## Weekly Standings Report
+
+The bot also checks for a weekly standings message every polling cycle.
+
+- It only sends on Tuesdays
+- It waits until `WEEKLY_REPORT_SEND_HOUR_ET` in Eastern time
+- It only considers regular-season Weeks `1` through `14`
+- It sends each week once and tracks sent weeks in `.state/weekly-report-state.json`
+- It includes current standings plus playoff odds for every team
+
+The message looks like this:
+
+```text
+Week 7 Standings
+Capitol Hill
+
+1. Team Rowan 6-1 | PF 812.3 | PO 94% | Bye 38%
+2. Capitol Crushers 5-2 | PF 790.1 | PO 86% | Bye 27%
+...
+```
 
 ## Trade Message Format
 

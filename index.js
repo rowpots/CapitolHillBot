@@ -7,6 +7,11 @@ import dotenv from "dotenv";
 import { loadDynastyValueBook } from "./dynasty-values.js";
 import { getRoastForSeverity } from "./roast-templates.js";
 import SnapBot from "./snapbot.js";
+import {
+  buildWeeklyReport,
+  findLatestCompletedWeek,
+  isTuesdayAfterHourInEastern,
+} from "./weekly-report.js";
 
 dotenv.config();
 
@@ -16,12 +21,17 @@ const __dirname = path.dirname(__filename);
 const STATE_DIR = path.join(__dirname, ".state");
 const STATE_FILE = path.join(STATE_DIR, "runtime-state.json");
 const TRADE_HISTORY_FILE = path.join(STATE_DIR, "trade-history.json");
+const WEEKLY_REPORT_STATE_FILE = path.join(
+  STATE_DIR,
+  "weekly-report-state.json"
+);
 const MANUAL_TEST_TRIGGER_FILE = path.join(STATE_DIR, "manual-test-trade.json");
 const PLAYERS_CACHE_FILE = path.join(STATE_DIR, "players-nfl.json");
 const PLAYERS_CACHE_TTL_MS = 7 * 24 * 60 * 60 * 1000;
 const REQUEST_TIMEOUT_MS = 20000;
 const VERDICT_EPSILON = 100;
 const MANUAL_TRIGGER_CHECK_INTERVAL_MS = 5000;
+const REGULAR_SEASON_END_WEEK = 14;
 
 const credentials = {
   username: process.env.USER_NAME?.trim() ?? "",
@@ -48,6 +58,18 @@ const config = {
   dryRun: parseBoolean(process.env.DRY_RUN, false),
   runOnce: parseBoolean(process.env.RUN_ONCE, false),
   roastMode: parseBoolean(process.env.ROAST_MODE, true),
+  weeklyReportsEnabled: parseBoolean(
+    process.env.WEEKLY_REPORTS_ENABLED,
+    true
+  ),
+  weeklyReportSendHourEt: Math.max(
+    0,
+    Math.min(23, parseInteger(process.env.WEEKLY_REPORT_SEND_HOUR_ET, 10))
+  ),
+  weeklyReportSimulationCount: Math.max(
+    1000,
+    parseInteger(process.env.WEEKLY_REPORT_SIMULATION_COUNT, 10000)
+  ),
 };
 
 const bot = new SnapBot();
@@ -77,6 +99,7 @@ async function main() {
   validateEnvironment();
 
   const state = await loadState();
+  const weeklyReportState = await loadWeeklyReportState();
 
   if (!config.dryRun) {
     await startSnapchatSession();
@@ -106,6 +129,7 @@ async function main() {
   do {
     try {
       await processQueuedManualTestTrade();
+      await pollForWeeklyReport(weeklyReportState);
       await pollForTrades(state);
     } catch (error) {
       console.error("Polling cycle failed, but the bot will keep running.");
@@ -300,6 +324,81 @@ async function pollForTrades(state) {
       console.error(error);
     }
   }
+}
+
+async function pollForWeeklyReport(weeklyReportState) {
+  if (!config.weeklyReportsEnabled) {
+    return;
+  }
+
+  const now = new Date();
+  if (!isTuesdayAfterHourInEastern(now, config.weeklyReportSendHourEt)) {
+    return;
+  }
+
+  const league = await fetchJson(
+    `https://api.sleeper.app/v1/league/${config.sleeperLeagueId}`
+  );
+  const season = String(league?.season ?? "").trim();
+
+  if (!season) {
+    console.warn("Weekly report skipped because the Sleeper season is unavailable.");
+    return;
+  }
+
+  const matchupsByWeek = await fetchMatchupsByWeek({
+    leagueId: config.sleeperLeagueId,
+    startWeek: 1,
+    endWeek: REGULAR_SEASON_END_WEEK,
+  });
+  const latestCompletedWeek = findLatestCompletedWeek(
+    matchupsByWeek,
+    REGULAR_SEASON_END_WEEK
+  );
+
+  if (latestCompletedWeek < 1) {
+    return;
+  }
+
+  if (hasSentWeeklyReport(weeklyReportState, season, latestCompletedWeek)) {
+    return;
+  }
+
+  const [rosters, users] = await Promise.all([
+    fetchJson(`https://api.sleeper.app/v1/league/${config.sleeperLeagueId}/rosters`),
+    fetchJson(`https://api.sleeper.app/v1/league/${config.sleeperLeagueId}/users`),
+  ]);
+  const playoffTeams =
+    Number(league?.settings?.playoff_teams) > 0
+      ? Number(league.settings.playoff_teams)
+      : 6;
+  const report = buildWeeklyReport({
+    league,
+    rosters,
+    users,
+    matchupsByWeek,
+    throughWeek: latestCompletedWeek,
+    regularSeasonEndWeek: REGULAR_SEASON_END_WEEK,
+    playoffTeams,
+    simulationCount: config.weeklyReportSimulationCount,
+  });
+
+  if (config.dryRun) {
+    console.log(`[Dry Run] ${report.textMessage}`);
+    return;
+  }
+
+  await sendChatMessage(
+    report.textMessage,
+    `weekly report for week ${latestCompletedWeek}`
+  );
+
+  markWeeklyReportSent(weeklyReportState, {
+    season,
+    week: latestCompletedWeek,
+    leagueId: config.sleeperLeagueId,
+  });
+  await saveWeeklyReportState(weeklyReportState);
 }
 
 async function deliverTradeNotification(analysis) {
@@ -1036,6 +1135,57 @@ async function saveState(state) {
   await fs.writeFile(STATE_FILE, JSON.stringify(serialized, null, 2), "utf8");
 }
 
+async function loadWeeklyReportState() {
+  await fs.mkdir(STATE_DIR, { recursive: true });
+
+  try {
+    const fileContents = await fs.readFile(WEEKLY_REPORT_STATE_FILE, "utf8");
+    const parsed = JSON.parse(fileContents);
+
+    return {
+      sentBySeason: parsed?.sentBySeason ?? {},
+    };
+  } catch (error) {
+    return {
+      sentBySeason: {},
+    };
+  }
+}
+
+async function saveWeeklyReportState(state) {
+  await fs.mkdir(STATE_DIR, { recursive: true });
+
+  const serialized = {
+    updatedAt: new Date().toISOString(),
+    sentBySeason: state.sentBySeason ?? {},
+  };
+
+  await fs.writeFile(
+    WEEKLY_REPORT_STATE_FILE,
+    JSON.stringify(serialized, null, 2),
+    "utf8"
+  );
+}
+
+function hasSentWeeklyReport(state, season, week) {
+  return Boolean(state?.sentBySeason?.[season]?.[String(week)]);
+}
+
+function markWeeklyReportSent(state, { season, week, leagueId }) {
+  if (!state.sentBySeason) {
+    state.sentBySeason = {};
+  }
+
+  if (!state.sentBySeason[season]) {
+    state.sentBySeason[season] = {};
+  }
+
+  state.sentBySeason[season][String(week)] = {
+    sentAt: new Date().toISOString(),
+    leagueId,
+  };
+}
+
 async function fetchJson(url) {
   const response = await fetch(url, {
     headers: {
@@ -1050,6 +1200,30 @@ async function fetchJson(url) {
   }
 
   return response.json();
+}
+
+async function fetchMatchupsByWeek({ leagueId, startWeek, endWeek }) {
+  const weeks = [];
+  for (let week = startWeek; week <= endWeek; week += 1) {
+    weeks.push(week);
+  }
+
+  const results = await Promise.all(
+    weeks.map(async (week) => {
+      try {
+        const matchups = await fetchJson(
+          `https://api.sleeper.app/v1/league/${leagueId}/matchups/${week}`
+        );
+        return [week, Array.isArray(matchups) ? matchups : []];
+      } catch (error) {
+        console.warn(`Failed to fetch Week ${week} matchups.`);
+        console.warn(error.message);
+        return [week, []];
+      }
+    })
+  );
+
+  return Object.fromEntries(results);
 }
 
 function buildRoundsToScan() {

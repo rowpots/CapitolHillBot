@@ -7,7 +7,8 @@
   "type": "module",
   "scripts": {
     "bot": "node index.js",
-    "test-trade": "node test-trade.js"
+    "test-trade": "node test-trade.js",
+    "preview-weekly-report": "node preview-weekly-report.js"
   },
   "author": "Roger Rodrigues",
   "dependencies": {
