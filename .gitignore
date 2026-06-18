@@ -1,3 +1,6 @@
 node_modules/
 .env
 screenshot.png
+*.cookies.json
+*-cookies.json
+.state/

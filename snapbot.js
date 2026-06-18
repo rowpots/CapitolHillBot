@@ -19,6 +19,55 @@ export default class SnapBot {
     this.page = null;
     this.browser = null;
   }
+
+  async getSessionState() {
+    if (!this.page) {
+      return {
+        chatListReady: false,
+        loginScreenVisible: false,
+        url: "",
+      };
+    }
+
+    return await this.page.evaluate(() => {
+      const isVisible = (element) => {
+        if (!element) {
+          return false;
+        }
+
+        const rect = element.getBoundingClientRect();
+        const style = window.getComputedStyle(element);
+        return (
+          rect.width > 0 &&
+          rect.height > 0 &&
+          style.display !== "none" &&
+          style.visibility !== "hidden"
+        );
+      };
+
+      const loginSelectors = [
+        "#ai_input",
+        'input[name="accountIdentifier"]',
+        "#password",
+      ];
+      const chatSelectors = [
+        "div.ReactVirtualized__Grid__innerScrollContainer",
+        "span[id^='title-']",
+        "div[role='listitem']",
+      ];
+
+      return {
+        chatListReady: chatSelectors.some((selector) =>
+          isVisible(document.querySelector(selector))
+        ),
+        loginScreenVisible: loginSelectors.some((selector) =>
+          isVisible(document.querySelector(selector))
+        ),
+        url: window.location.href,
+      };
+    });
+  }
+
   async launchSnapchat(obj, cookiefile) {
     try {
       const options = {
@@ -29,13 +78,15 @@ export default class SnapBot {
 
       if (cookiefile) {
         try {
-          const cookiesString = fs.readFileSync(
-            `./${cookiefile}-cookies.json`,
-            "utf-8"
-          );
-          const cookies = JSON.parse(cookiesString);
-          await this.browser.setCookie(...cookies);
-          console.log("Cookies set");
+          const cookiePath = `./${cookiefile}-cookies.json`;
+          if (fs.existsSync(cookiePath)) {
+            const cookiesString = fs.readFileSync(cookiePath, "utf-8");
+            const cookies = JSON.parse(cookiesString);
+            await this.browser.setCookie(...cookies);
+            console.log("Cookies set");
+          } else {
+            console.log("No saved cookie file found. Continuing with a fresh session.");
+          }
         } catch (error) {
           console.error("Error in using cookies", error);
         }
@@ -82,7 +133,7 @@ export default class SnapBot {
         }
       });
 
-      await this.page.goto("https://www.snapchat.com/?original_referrer=none");
+      await this.page.goto("https://web.snapchat.com");
     } catch (error) {
       console.error(`Error while Starting Snapchat : ${error}`);
     }
@@ -129,23 +180,25 @@ export default class SnapBot {
 
     await this.page.click("button[type='submit']");
     await delay(10000);
-    //click not now
-    try {
-      const notNowBtn = "button.NRgbw.eKaL7.Bnaur"; 
-      console.log("Checking for 'Not now' button...");
-      await this.page.waitForSelector(notNowBtn, {
-        visible: true,
-        timeout: 5000,
-      });
-      await this.page.click(notNowBtn);
-      console.log("Clicked 'Not now' button.");
-    } catch (e) {
-      console.log("Popup handling error or popup not found:", e);
-    }
+    await this.handlePopup();
     await delay(1000);
   }
 
   async isLogged() {
+    try {
+      const state = await this.getSessionState();
+      if (state.chatListReady) {
+        return true;
+      }
+      if (state.loginScreenVisible) {
+        return false;
+      }
+    } catch (error) {
+      if (!this.isDetachedFrameError(error)) {
+        throw error;
+      }
+    }
+
     const defaultLoginBtn = await this.page.$("#ai_input");
     const loginBtn = await this.page.$('input[name="accountIdentifier"]');
 
@@ -155,27 +208,126 @@ export default class SnapBot {
     return true;
   }
 
-  async handlePopup() {
-    try {
-      const notNowBtn = "button.NRgbw.eKaL7.Bnaur";
-      const notNowBtnHandle = await this.page.waitForSelector(notNowBtn, {
-        visible: true,
-        timeout: 5000,
-      });
-      console.log("Checking for 'Not now' button...");
-      if (notNowBtnHandle) {
-        await this.page.waitForSelector(notNowBtn, {
-          visible: true,
-          timeout: 5000,
+  async handlePopup(timeout = 8000) {
+    const deadline = Date.now() + timeout;
+
+    while (Date.now() < deadline) {
+      let clicked = null;
+      try {
+        clicked = await this.page.evaluate(() => {
+          const isVisible = (element) => {
+            const rect = element.getBoundingClientRect();
+            return rect.width > 0 && rect.height > 0;
+          };
+
+          const allButtons = Array.from(
+            document.querySelectorAll("button, [role='button']")
+          );
+
+          const textTargets = ["Not now", "Not Now", "Maybe later", "Skip"];
+          for (const target of textTargets) {
+            const match = allButtons.find((button) => {
+              return (
+                isVisible(button) &&
+                button.textContent?.trim().toLowerCase() === target.toLowerCase()
+              );
+            });
+
+            if (match) {
+              match.click();
+              return target;
+            }
+          }
+
+          const labeledClose = allButtons.find((button) => {
+            const label = (
+              button.getAttribute("aria-label") ||
+              button.getAttribute("title") ||
+              ""
+            ).toLowerCase();
+            return (
+              isVisible(button) &&
+              (label.includes("close") || label.includes("dismiss"))
+            );
+          });
+
+          if (labeledClose) {
+            labeledClose.click();
+            return "close";
+          }
+
+          const cornerClose = allButtons.find((button) => {
+            if (!isVisible(button)) {
+              return false;
+            }
+
+            const rect = button.getBoundingClientRect();
+            return (
+              rect.width <= 48 &&
+              rect.height <= 48 &&
+              rect.top < 160 &&
+              rect.right > window.innerWidth - 160
+            );
+          });
+
+          if (cornerClose) {
+            cornerClose.click();
+            return "corner close";
+          }
+
+          return null;
         });
-        await this.page.click(notNowBtn);
-        console.log("Clicked 'Not now' button.");
-      } else {
-        console.log("not found");
+      } catch (error) {
+        if (this.isDetachedFrameError(error)) {
+          await delay(300);
+          continue;
+        }
+
+        throw error;
       }
-    } catch (error) {
-      console.log(`could not find Popup`);
+
+      if (clicked) {
+        console.log(`Dismissed popup using "${clicked}".`);
+        await delay(500);
+        return true;
+      }
+
+      await delay(400);
     }
+
+    console.log("No blocking popup found.");
+    return false;
+  }
+
+  async waitForLoginScreenOrChatList(timeout = 60000) {
+    if (!this.page.url().startsWith("https://web.snapchat.com")) {
+      await this.page.goto("https://web.snapchat.com");
+    }
+
+    const deadline = Date.now() + timeout;
+
+    while (Date.now() < deadline) {
+      try {
+        const state = await this.getSessionState();
+
+        if (state.chatListReady) {
+          return "chat_list";
+        }
+
+        if (state.loginScreenVisible) {
+          return "login_screen";
+        }
+      } catch (error) {
+        if (!this.isDetachedFrameError(error)) {
+          throw error;
+        }
+      }
+
+      await this.handlePopup(1200);
+      await delay(500);
+    }
+
+    return null;
   }
 
   async captureSnap(obj) {
@@ -390,9 +542,7 @@ export default class SnapBot {
   }
 
   async listRecipients() {
-    await this.page.waitForSelector(
-      "div.ReactVirtualized__Grid__innerScrollContainer"
-    );
+    await this.waitForChatList();
     const lists = await this.page.$$("div[role='listitem']");
     const data = [];
 
@@ -416,50 +566,90 @@ export default class SnapBot {
   }
 
   async sendMessage(obj) {
-    await this.page.waitForSelector(
-      "div.ReactVirtualized__Grid__innerScrollContainer"
-    );
-    const lists = await this.page.$$("div[role='listitem']");
+    const titleSpan = await this.findRecipientTitleSpan(obj.chat);
 
-    for (const listItem of lists) {
-      const titleSpan = await listItem.$("span[id^='title-']");
-      if (titleSpan) {
-        const id = await this.page.evaluate((el) => el.id, titleSpan);
-        let chatID = "title-" + obj.chat;
-        if (id === chatID) {
-          if (!obj.alreadyOpen) {
-            await titleSpan.click();
-          }
+    if (!titleSpan) {
+      throw new Error(`Could not find chat ${obj.chat} in the Snapchat chat list.`);
+    }
 
-          if (obj.message === "") {
-            // const cleanedID = obj.chat.replace(/^title-/, "");
-            // return this.extractChatData(cleanedID);
-          }
+    if (!obj.alreadyOpen) {
+      await titleSpan.click();
+    }
 
-          // if its an array
-          if (Array.isArray(obj.message)) {
-            for (let msg of obj.message) {
-              await this.page.waitForSelector('div[role="textbox"].euyIb');
-              await this.page.type('div[role="textbox"].euyIb', `${msg}`);
-              await this.page.keyboard.press("Enter");
-            }
-          }
-          //if string
-          if (typeof obj.message == "string") {
-            await this.page.waitForSelector('div[role="textbox"].euyIb');
-            await this.page.type('div[role="textbox"].euyIb', obj.message, {
-              delay: 200,
-            });
-            await this.page.keyboard.press("Enter");
-          }
+    if (obj.message === "") {
+      return;
+    }
 
-          if (obj.exit) {
-            // await delay(300);
-            await titleSpan.click(); // go back
-          }
-        }
+    if (Array.isArray(obj.message)) {
+      await this.typeChatMessage(obj.message.join("\n"));
+    }
+
+    if (typeof obj.message == "string") {
+      await this.typeChatMessage(obj.message);
+    }
+
+    if (obj.exit) {
+      await titleSpan.click();
+    }
+  }
+
+  async sendTradeCard({ chatId, imagePath, caption = "", captionPosition = 500 }) {
+    await this.openMessagingHome();
+    await this.captureSnap({
+      path: imagePath,
+      caption,
+      position: captionPosition,
+    });
+    await this.sendSnapToChat(chatId);
+  }
+
+  async typeChatMessage(message) {
+    const textboxSelector = 'div[role="textbox"].euyIb';
+    await this.page.waitForSelector(textboxSelector, { visible: true });
+    await this.page.click(textboxSelector);
+
+    const lines = String(message).split(/\r?\n/);
+
+    for (let index = 0; index < lines.length; index += 1) {
+      const line = lines[index];
+      if (line) {
+        await this.page.keyboard.type(line, { delay: 40 });
+      }
+
+      if (index < lines.length - 1) {
+        await this.page.keyboard.down("Shift");
+        await this.page.keyboard.press("Enter");
+        await this.page.keyboard.up("Shift");
       }
     }
+
+    await this.page.keyboard.press("Enter");
+  }
+
+  async findRecipientTitleSpan(chatId, maxScrollAttempts = 30) {
+    await this.waitForChatList();
+    return this.findTitleSpanOnCurrentView(chatId, maxScrollAttempts);
+  }
+
+  async findTitleSpanOnCurrentView(chatId, maxScrollAttempts = 40) {
+    const targetId = `title-${chatId}`;
+    await this.resetScrollableContainersToTop();
+
+    for (let attempt = 0; attempt <= maxScrollAttempts; attempt += 1) {
+      const titleSpan = await this.page.$(`span[id="${targetId}"]`);
+      if (titleSpan) {
+        return titleSpan;
+      }
+
+      const didScroll = await this.scrollScrollableContainers();
+      if (!didScroll) {
+        break;
+      }
+
+      await delay(300);
+    }
+
+    return null;
   }
 
   async saveCookies(username) {
@@ -553,9 +743,7 @@ export default class SnapBot {
   }
 
   async userStatus() {
-    await this.page.waitForSelector(
-      "div.ReactVirtualized__Grid__innerScrollContainer"
-    );
+    await this.waitForChatList();
     const lists = await this.page.$$("div[role='listitem']");
     const data = [];
 
@@ -695,5 +883,211 @@ export default class SnapBot {
   // add custom methods
   static extend(methods) {
     Object.assign(SnapBot.prototype, methods);
+  }
+
+  async waitForChatList(timeout = 60000) {
+    if (!this.page.url().startsWith("https://web.snapchat.com")) {
+      await this.page.goto("https://web.snapchat.com");
+    }
+
+    const deadline = Date.now() + timeout;
+    let lastKnownState = null;
+
+    while (Date.now() < deadline) {
+      try {
+        const state = await this.getSessionState();
+        lastKnownState = state;
+
+        if (state.chatListReady) {
+          return;
+        }
+      } catch (error) {
+        if (!this.isDetachedFrameError(error)) {
+          throw error;
+        }
+      }
+
+      await this.handlePopup(1200);
+      await delay(500);
+    }
+
+    const timeoutDetail = lastKnownState?.loginScreenVisible
+      ? " Login screen is still visible, so the session likely still needs manual login or verification."
+      : lastKnownState?.url
+        ? ` Last seen URL: ${lastKnownState.url}`
+        : "";
+
+    throw new Error(
+      `Timed out waiting for the Snapchat chat list after ${timeout}ms.${timeoutDetail}`
+    );
+  }
+
+  async openMessagingHome() {
+    await this.page.goto("https://web.snapchat.com");
+    await this.handlePopup(3000);
+    await this.waitForChatList();
+  }
+
+  async sendSnapToChat(chatId) {
+    const openedSendChooser = await this.clickSnapComposerSendButton();
+    if (!openedSendChooser) {
+      throw new Error("Could not open the Snapchat send chooser.");
+    }
+
+    await delay(1500);
+    await this.handlePopup(1500);
+
+    const titleSpan = await this.findTitleSpanOnCurrentView(chatId, 45);
+    if (!titleSpan) {
+      throw new Error(`Could not find snap recipient chat ${chatId}.`);
+    }
+
+    await titleSpan.click();
+    await delay(750);
+
+    const clickedFinalSendButton =
+      (await this.clickVisibleElement(["button[type='submit']"])) ||
+      (await this.clickVisibleButtonByText(["Send", "Send Snap", "Send to"]));
+
+    if (!clickedFinalSendButton) {
+      throw new Error("Could not find the final Snapchat send button.");
+    }
+
+    await delay(2500);
+  }
+
+  async clickSnapComposerSendButton() {
+    const selectorClicked = await this.clickVisibleElement([
+      "button.YatIx.fGS78.eKaL7.Bnaur",
+      "button[aria-label*='Send']",
+      "button[title*='Send']",
+    ]);
+
+    if (selectorClicked) {
+      return true;
+    }
+
+    return this.clickVisibleButtonByText(["Send", "Send To", "Send to"]);
+  }
+
+  async clickVisibleElement(selectors) {
+    for (const selector of selectors) {
+      try {
+        const handles = await this.page.$$(selector);
+        for (const handle of handles) {
+          const box = await handle.boundingBox();
+          if (box) {
+            await handle.click();
+            return true;
+          }
+        }
+      } catch (error) {
+        if (!this.isDetachedFrameError(error)) {
+          throw error;
+        }
+      }
+    }
+
+    return false;
+  }
+
+  async clickVisibleButtonByText(textTargets) {
+    try {
+      return await this.page.evaluate((targets) => {
+        const normalizedTargets = targets.map((target) => target.toLowerCase());
+        const isVisible = (element) => {
+          const rect = element.getBoundingClientRect();
+          return rect.width > 0 && rect.height > 0;
+        };
+
+        const buttons = Array.from(
+          document.querySelectorAll("button, [role='button']")
+        );
+        const match = buttons.find((button) => {
+          if (!isVisible(button)) {
+            return false;
+          }
+
+          const buttonText = button.textContent?.trim().toLowerCase();
+          if (!buttonText) {
+            return false;
+          }
+
+          return normalizedTargets.some((target) => buttonText.includes(target));
+        });
+
+        if (match) {
+          match.click();
+          return true;
+        }
+
+        return false;
+      }, textTargets);
+    } catch (error) {
+      if (this.isDetachedFrameError(error)) {
+        return false;
+      }
+
+      throw error;
+    }
+  }
+
+  async resetScrollableContainersToTop() {
+    try {
+      await this.page.evaluate(() => {
+        const containers = Array.from(document.querySelectorAll("*")).filter(
+          (element) =>
+            element.scrollHeight > element.clientHeight + 40 &&
+            element.clientHeight > 120
+        );
+
+        for (const container of containers) {
+          container.scrollTop = 0;
+        }
+      });
+    } catch (error) {
+      if (!this.isDetachedFrameError(error)) {
+        throw error;
+      }
+    }
+  }
+
+  async scrollScrollableContainers() {
+    try {
+      return await this.page.evaluate(() => {
+        const containers = Array.from(document.querySelectorAll("*"))
+          .filter(
+            (element) =>
+              element.scrollHeight > element.clientHeight + 40 &&
+              element.clientHeight > 120
+          )
+          .sort(
+            (left, right) =>
+              right.clientHeight * right.clientWidth -
+              left.clientHeight * left.clientWidth
+          );
+
+        let changed = false;
+        for (const container of containers.slice(0, 8)) {
+          const previousScrollTop = container.scrollTop;
+          container.scrollTop += Math.max(180, Math.floor(container.clientHeight * 0.8));
+          if (container.scrollTop !== previousScrollTop) {
+            changed = true;
+          }
+        }
+
+        return changed;
+      });
+    } catch (error) {
+      if (this.isDetachedFrameError(error)) {
+        return false;
+      }
+
+      throw error;
+    }
+  }
+
+  isDetachedFrameError(error) {
+    return String(error?.message ?? "").includes("detached Frame");
   }
 }

@@ -1,0 +1,19 @@
+⚠️  Warning: Some methods were last tested on version v13.38.0 
+
+Detected current version is v13.79.0
+
+Some features might not work properly.
+If you encounter issues, please try updating the project using 'git pull'.
+If the problem persists, consider raising an issue or contacting the developer.
+⚠️  Warning: Some methods were last tested on version v13.38.0 
+
+Detected current version is v13.79.0
+
+Some features might not work properly.
+If you encounter issues, please try updating the project using 'git pull'.
+If the problem persists, consider raising an issue or contacting the developer.
+Fatal error while running the Sleeper trade bot.
+Error: Timed out waiting for the Snapchat chat list after 60000ms.
+    at SnapBot.waitForChatList (file:///C:/Users/rowan/OneDrive/Desktop/tradebot/SnapBot/snapbot.js:826:11)
+    at async startSnapchatSession (file:///C:/Users/rowan/OneDrive/Desktop/tradebot/SnapBot/index.js:148:3)
+    at async main (file:///C:/Users/rowan/OneDrive/Desktop/tradebot/SnapBot/index.js:74:5)

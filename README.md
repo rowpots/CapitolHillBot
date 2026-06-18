@@ -11,6 +11,10 @@ Built on top of Puppeteer, SnapBot enables developers to create powerful Snapcha
 
 Whether you're automating daily snaps, managing multiple accounts, or building complex chat workflows, SnapBot abstracts the hard parts so you can focus on what matters: the logic and creativity behind your automation.
 
+## Custom Trade Bot Guide
+
+For the Sleeper-to-Snapchat dynasty trade bot in this folder, use [TRADEBOT_README.md](c:/Users/rowan/OneDrive/Desktop/tradebot/SnapBot/TRADEBOT_README.md).
+
 ## 💼 Use Cases
 * Daily content distribution via snaps
 * Streak automation for agencies or influencers
@@ -68,6 +72,8 @@ Edit the `.env` file and add your Snapchat credentials:
 ```env
 USER_NAME=<Your Snapchat Username>
 USER_PASSWORD=<Your Snapchat Password>
+SLEEPER_LEAGUE_ID=<Your Sleeper League ID>
+SNAPCHAT_GROUP_CHAT_ID=<Your Snapchat Group Chat ID>
 ```
 
 
@@ -82,7 +88,18 @@ npm run bot
 
 
 
-This command will start SnapBot, logging into Snapchat, capturing a snap, and sending it to your specified contacts.
+This command now starts a Sleeper-to-Snapchat bridge that:
+
+* logs into Snapchat Web using the configured bot account
+* polls the configured Sleeper league for completed trades
+* posts each new trade into one configured Snapchat chat
+* stores seen transaction ids locally in `.state/` so restarts do not resend old trades
+
+Helpful env flags:
+
+* `DRY_RUN=true` logs the message instead of posting to Snapchat
+* `RUN_ONCE=true` performs one poll and exits
+* `POLL_INTERVAL_MS=60000` checks once per minute by default
 
 If you run into a CAPTCHA when using SnapBot, see this guide for a solution:  
 [Bypass CAPTCHA](https://github.com/Emmanuel-Rods/SnapBot/blob/main/bypass%20captcha.md)

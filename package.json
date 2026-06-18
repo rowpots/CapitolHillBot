@@ -6,7 +6,8 @@
   "devDependencies": {},
   "type": "module",
   "scripts": {
-    "bot": "node index.js"
+    "bot": "node index.js",
+    "test-trade": "node test-trade.js"
   },
   "author": "Roger Rodrigues",
   "dependencies": {
