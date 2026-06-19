@@ -4,6 +4,7 @@ import { fileURLToPath } from "url";
 
 import dotenv from "dotenv";
 
+import { describeError, installTimestampedConsole } from "./logging.js";
 import { loadDynastyValueBook } from "./dynasty-values.js";
 import { getRoastForSeverity } from "./roast-templates.js";
 import SnapBot from "./snapbot.js";
@@ -14,6 +15,7 @@ import {
 } from "./weekly-report.js";
 
 dotenv.config();
+installTimestampedConsole();
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -1187,13 +1189,21 @@ function markWeeklyReportSent(state, { season, week, leagueId }) {
 }
 
 async function fetchJson(url) {
-  const response = await fetch(url, {
-    headers: {
-      "user-agent": "tradebot-snapchat-bridge/1.0",
-      accept: "application/json",
-    },
-    signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
-  });
+  let response = null;
+
+  try {
+    response = await fetch(url, {
+      headers: {
+        "user-agent": "tradebot-snapchat-bridge/1.0",
+        accept: "application/json",
+      },
+      signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+    });
+  } catch (error) {
+    throw new Error(`Network request failed for ${url}: ${describeError(error)}`, {
+      cause: error,
+    });
+  }
 
   if (!response.ok) {
     throw new Error(`Request failed for ${url} with status ${response.status}.`);

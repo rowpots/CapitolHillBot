@@ -1,9 +1,11 @@
 import dotenv from "dotenv";
 
+import { describeError, installTimestampedConsole } from "./logging.js";
 import SnapBot from "./snapbot.js";
 import { buildWeeklyReport, findLatestCompletedWeek } from "./weekly-report.js";
 
 dotenv.config();
+installTimestampedConsole();
 
 const args = parseArgs(process.argv.slice(2));
 const REGULAR_SEASON_END_WEEK = 14;
@@ -128,12 +130,20 @@ async function fetchMatchupsByWeek(leagueId, startWeek, endWeek) {
 }
 
 async function fetchJson(url) {
-  const response = await fetch(url, {
-    headers: {
-      "user-agent": "tradebot-snapchat-bridge/1.0",
-      accept: "application/json",
-    },
-  });
+  let response = null;
+
+  try {
+    response = await fetch(url, {
+      headers: {
+        "user-agent": "tradebot-snapchat-bridge/1.0",
+        accept: "application/json",
+      },
+    });
+  } catch (error) {
+    throw new Error(`Network request failed for ${url}: ${describeError(error)}`, {
+      cause: error,
+    });
+  }
 
   if (!response.ok) {
     throw new Error(`Request failed for ${url} with status ${response.status}.`);
