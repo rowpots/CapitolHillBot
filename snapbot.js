@@ -46,8 +46,11 @@ export default class SnapBot {
       };
 
       const loginSelectors = [
+        'form[data-testid="sign-in-form"] input[type="text"]',
         "#ai_input",
         'input[name="accountIdentifier"]',
+        'input[autocomplete="username"]',
+        'input[type="email"]',
         "#password",
       ];
       const chatSelectors = [
@@ -144,41 +147,31 @@ export default class SnapBot {
     if (username == "" || password == "") {
       throw new Error("Credentials cannot be empty");
     }
-    try {
-      // Enter username
-      const defaultLoginBtn = await this.page.$("#ai_input");
-      const loginBtn = await this.page.$('input[name="accountIdentifier"]');
 
-      if (loginBtn) {
-        this.page.waitForNetworkIdle();
-        console.log("Entering username...");
-        await this.page.type('input[name="accountIdentifier"]', username, {
-          delay: 100,
-        });
-      }
-      if (defaultLoginBtn) {
-        console.log("Entering username...");
-        await this.page.type("#ai_input", username, { delay: 100 });
-      }
+    const usernameSelector = await this.waitForVisibleSelector(
+      [
+        'form[data-testid="sign-in-form"] input[type="text"]',
+        'input[name="accountIdentifier"]',
+        "#ai_input",
+        'input[autocomplete="username"]',
+        'input[type="email"]',
+        'input[type="text"]',
+      ],
+      { timeout: 60000, description: "username input" }
+    );
+    console.log(`Entering username using ${usernameSelector}...`);
+    await this.fillVisibleInput(usernameSelector, username);
+    await this.submitLoginStep("username");
 
-      await this.page.click("button[type='submit']");
-    } catch (e) {
-      console.log("Username field error:", e);
-    }
-    try {
-      //Enter Password
-      console.log("Waiting for password field...");
-      await this.page.waitForSelector("#password", {
-        visible: true,
-        timeout: 60000,
-      });
-      await this.page.type("#password", password, { delay: 100 });
-      console.log("Password field filled.");
-    } catch (e) {
-      console.log("Password field loading error:", e);
-    }
+    console.log("Waiting for password field...");
+    const passwordSelector = await this.waitForVisibleSelector(
+      ["#password", 'input[type="password"]'],
+      { timeout: 60000, description: "password input" }
+    );
+    await this.fillVisibleInput(passwordSelector, password);
+    console.log("Password field filled.");
 
-    await this.page.click("button[type='submit']");
+    await this.submitLoginStep("password");
     await delay(10000);
     await this.handlePopup();
     await delay(1000);
@@ -199,10 +192,18 @@ export default class SnapBot {
       }
     }
 
-    const defaultLoginBtn = await this.page.$("#ai_input");
-    const loginBtn = await this.page.$('input[name="accountIdentifier"]');
+    const loginSelectors = [
+      'form[data-testid="sign-in-form"] input[type="text"]',
+      "#ai_input",
+      'input[name="accountIdentifier"]',
+      'input[autocomplete="username"]',
+      'input[type="email"]',
+    ];
+    const loginFields = await Promise.all(
+      loginSelectors.map((selector) => this.page.$(selector))
+    );
 
-    if (defaultLoginBtn || loginBtn) {
+    if (loginFields.some(Boolean)) {
       return false;
     }
     return true;
@@ -534,6 +535,128 @@ export default class SnapBot {
       setTimeout(resolve, time);
     });
   }
+
+  async waitForVisibleSelector(
+    selectors,
+    { timeout = 30000, description = "element" } = {}
+  ) {
+    await this.page.waitForFunction(
+      (candidateSelectors) => {
+        const isVisible = (element) => {
+          if (!element) {
+            return false;
+          }
+
+          const rect = element.getBoundingClientRect();
+          const style = window.getComputedStyle(element);
+          return (
+            rect.width > 0 &&
+            rect.height > 0 &&
+            style.display !== "none" &&
+            style.visibility !== "hidden"
+          );
+        };
+
+        return candidateSelectors.some((selector) => {
+          const element = document.querySelector(selector);
+          return (
+            isVisible(element) &&
+            !element.disabled &&
+            !element.readOnly
+          );
+        });
+      },
+      { timeout },
+      selectors
+    );
+
+    for (const selector of selectors) {
+      const handle = await this.page.$(selector);
+      if (!handle) {
+        continue;
+      }
+
+      const box = await handle.boundingBox();
+      const isEnabled = await handle.evaluate(
+        (element) => !element.disabled && !element.readOnly
+      );
+      if (box && isEnabled) {
+        return selector;
+      }
+    }
+
+    throw new Error(`Unable to find a visible ${description}.`);
+  }
+
+  async fillVisibleInput(selector, value) {
+    const input = await this.page.waitForSelector(selector, {
+      visible: true,
+      timeout: 30000,
+    });
+
+    await input.click({ clickCount: 3 });
+    await this.page.keyboard.press("Backspace");
+
+    await input.evaluate((element) => {
+      element.focus();
+      const setter = Object.getOwnPropertyDescriptor(
+        window.HTMLInputElement.prototype,
+        "value"
+      )?.set;
+      setter?.call(element, "");
+      element.dispatchEvent(new Event("input", { bubbles: true }));
+      element.dispatchEvent(new Event("change", { bubbles: true }));
+    });
+
+    await input.type(String(value), { delay: 90 });
+
+    const typedValue = await input.evaluate((element) => element.value ?? "");
+    if (typedValue.trim() === String(value).trim()) {
+      return;
+    }
+
+    await input.evaluate((element, nextValue) => {
+      element.focus();
+      const setter = Object.getOwnPropertyDescriptor(
+        window.HTMLInputElement.prototype,
+        "value"
+      )?.set;
+      setter?.call(element, nextValue);
+      element.dispatchEvent(new Event("input", { bubbles: true }));
+      element.dispatchEvent(new Event("change", { bubbles: true }));
+      element.blur?.();
+    }, String(value));
+
+    const finalValue = await input.evaluate((element) => element.value ?? "");
+    if (finalValue.trim() !== String(value).trim()) {
+      throw new Error(`Unable to populate ${selector}.`);
+    }
+  }
+
+  async submitLoginStep(stepLabel) {
+    const clicked =
+      (await this.clickVisibleElement([
+        "button[type='submit']",
+        "button[data-testid='continue-button']",
+        "button[data-testid='login-button']",
+      ])) ||
+      (await this.clickVisibleButtonByText([
+        "Continue",
+        "Next",
+        "Log In",
+        "Login",
+        "Submit",
+      ]));
+
+    if (!clicked) {
+      await this.page.keyboard.press("Enter");
+      console.log(`Submitted Snapchat ${stepLabel} step with Enter.`);
+      return;
+    }
+
+    console.log(`Submitted Snapchat ${stepLabel} step.`);
+  }
+
   //beta
   async openFriendRequests() {
     await this.page.waitForSelector('button[title="View friend requests"]');

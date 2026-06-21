@@ -64,6 +64,7 @@ These are the important ones:
 - `TRANSACTION_START_ROUND`: first Sleeper transaction round to scan
 - `TRANSACTION_END_ROUND`: last Sleeper transaction round to scan
 - `DYNASTY_VALUE_MODE`: `auto`, `1qb`, or `2qb`
+- `TRADE_NOTIFICATION_MODE`: `text` or `image`, default `text`
 - `ROAST_MODE`: `true` or `false`
 - `ROAST_THRESHOLD`: higher number means fewer roasts
 - `WEEKLY_REPORTS_ENABLED`: `true` or `false`, default `true`
@@ -90,6 +91,11 @@ Queue a fake trade for the running bot:
 npm run test-trade
 ```
 
+`npm run test-trade` follows `TRADE_NOTIFICATION_MODE`:
+
+- `text`: sends the sample text trade message
+- `image`: sends the sample trade card image
+
 Queue a fake trade without a roast:
 
 ```bash
@@ -101,6 +107,14 @@ Preview a weekly standings message without posting to Snapchat:
 ```bash
 npm run preview-weekly-report -- --previous --week 14
 ```
+
+Render the current trade card mockup locally:
+
+```bash
+npm run preview-trade-card
+```
+
+The preview PNG is written to `.state/cards/trade-compact-b-preview.png`.
 
 Send a weekly standings test to a separate Snapchat group chat:
 
@@ -117,6 +131,12 @@ Run one dry check without posting to Snapchat:
 
 ```bash
 $env:DRY_RUN='true'; $env:RUN_ONCE='true'; node index.js
+```
+
+Switch trade alerts to image mode:
+
+```bash
+TRADE_NOTIFICATION_MODE=image
 ```
 
 ## How The Live Bot Works

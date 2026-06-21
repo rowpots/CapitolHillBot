@@ -8,7 +8,8 @@
   "scripts": {
     "bot": "node index.js",
     "test-trade": "node test-trade.js",
-    "preview-weekly-report": "node preview-weekly-report.js"
+    "preview-weekly-report": "node preview-weekly-report.js",
+    "preview-trade-card": "node preview-trade-card.js"
   },
   "author": "Roger Rodrigues",
   "dependencies": {

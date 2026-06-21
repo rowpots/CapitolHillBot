@@ -100,6 +100,7 @@ Helpful env flags:
 * `DRY_RUN=true` logs the message instead of posting to Snapchat
 * `RUN_ONCE=true` performs one poll and exits
 * `POLL_INTERVAL_MS=60000` checks once per minute by default
+* `TRADE_NOTIFICATION_MODE=image` switches trade alerts from text to image cards
 
 If you run into a CAPTCHA when using SnapBot, see this guide for a solution:  
 [Bypass CAPTCHA](https://github.com/Emmanuel-Rods/SnapBot/blob/main/bypass%20captcha.md)

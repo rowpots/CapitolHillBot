@@ -8,6 +8,7 @@ import { describeError, installTimestampedConsole } from "./logging.js";
 import { loadDynastyValueBook } from "./dynasty-values.js";
 import { getRoastForSeverity } from "./roast-templates.js";
 import SnapBot from "./snapbot.js";
+import { renderTradeCardImage } from "./trade-card.js";
 import {
   buildWeeklyReport,
   findLatestCompletedWeek,
@@ -55,6 +56,10 @@ const config = {
   transactionStartRound: parseInteger(process.env.TRANSACTION_START_ROUND, 0),
   transactionEndRound: parseInteger(process.env.TRANSACTION_END_ROUND, 18),
   dynastyValueMode: parseValueMode(process.env.DYNASTY_VALUE_MODE, "auto"),
+  tradeNotificationMode: parseTradeNotificationMode(
+    process.env.TRADE_NOTIFICATION_MODE,
+    "text"
+  ),
   roastThreshold: parseInteger(process.env.ROAST_THRESHOLD, 750),
   headless: parseBoolean(process.env.HEADLESS, false),
   dryRun: parseBoolean(process.env.DRY_RUN, false),
@@ -405,7 +410,16 @@ async function pollForWeeklyReport(weeklyReportState) {
 
 async function deliverTradeNotification(analysis) {
   if (config.dryRun) {
-    console.log(`[Dry Run] ${analysis.textMessage}`);
+    if (config.tradeNotificationMode === "image") {
+      const imagePath = await renderTradeCardForDelivery(
+        analysis,
+        `trade ${analysis.tradeId}`
+      );
+      console.log(`[Dry Run] Trade card rendered to ${imagePath}`);
+    } else {
+      console.log(`[Dry Run] ${analysis.textMessage}`);
+    }
+
     if (config.roastMode && analysis.roastText) {
       console.log(`[Dry Run] ${analysis.roastText}`);
     }
@@ -413,12 +427,21 @@ async function deliverTradeNotification(analysis) {
   }
 
   try {
-    await sendChatMessage(
-      analysis.textMessage,
-      `trade text for trade ${analysis.tradeId}`
-    );
+    if (config.tradeNotificationMode === "image") {
+      await sendTradeCardMessage(
+        analysis,
+        `trade card for trade ${analysis.tradeId}`
+      );
+    } else {
+      await sendChatMessage(
+        analysis.textMessage,
+        `trade text for trade ${analysis.tradeId}`
+      );
+    }
   } catch (error) {
-    console.warn(`Trade text delivery failed for trade ${analysis.tradeId}.`);
+    console.warn(
+      `Trade ${config.tradeNotificationMode} delivery failed for trade ${analysis.tradeId}.`
+    );
     console.warn(error.message);
     return false;
   }
@@ -454,6 +477,9 @@ async function processQueuedManualTestTrade() {
 
   const tradeMessage = String(payload?.tradeMessage ?? "").trim();
   const roastMessage = String(payload?.roastMessage ?? "").trim();
+  const tradeCardAnalysis = isTradeCardAnalysis(payload?.tradeCardAnalysis)
+    ? payload.tradeCardAnalysis
+    : null;
   const shouldSendRoast = Boolean(payload?.sendRoast) && roastMessage;
 
   if (!tradeMessage) {
@@ -464,12 +490,36 @@ async function processQueuedManualTestTrade() {
 
   try {
     if (config.dryRun) {
-      console.log(`[Dry Run] Queued manual test trade:\n${tradeMessage}`);
+      if (config.tradeNotificationMode === "image" && tradeCardAnalysis) {
+        const imagePath = await renderTradeCardForDelivery(
+          tradeCardAnalysis,
+          "manual test trade"
+        );
+        console.log(`[Dry Run] Queued manual test trade card: ${imagePath}`);
+      } else {
+        if (config.tradeNotificationMode === "image") {
+          console.warn(
+            "Manual test trade did not include trade card data. Falling back to text preview."
+          );
+        }
+        console.log(`[Dry Run] Queued manual test trade:\n${tradeMessage}`);
+      }
+
       if (shouldSendRoast) {
         console.log(`[Dry Run] Queued manual test roast:\n${roastMessage}`);
       }
     } else {
-      await sendChatMessage(tradeMessage, "manual test trade message");
+      if (config.tradeNotificationMode === "image" && tradeCardAnalysis) {
+        await sendTradeCardMessage(tradeCardAnalysis, "manual test trade card");
+      } else {
+        if (config.tradeNotificationMode === "image") {
+          console.warn(
+            "Manual test trade did not include trade card data. Falling back to text delivery."
+          );
+        }
+        await sendChatMessage(tradeMessage, "manual test trade message");
+      }
+
       if (shouldSendRoast) {
         await sendChatMessage(roastMessage, "manual test roast message");
       }
@@ -493,6 +543,26 @@ async function sendChatMessage(message, label) {
     exit: false,
   });
   console.log(`Sent ${label}.`);
+}
+
+async function sendTradeCardMessage(analysis, label) {
+  const imagePath = await renderTradeCardForDelivery(analysis, label);
+  await ensureSnapchatSessionReady();
+  await bot.sendTradeCard({
+    chatId: config.snapchatGroupChatId,
+    imagePath,
+  });
+  console.log(`Sent ${label}.`);
+}
+
+async function renderTradeCardForDelivery(analysis, label) {
+  const imagePath = await renderTradeCardImage({
+    analysis,
+    stateDir: STATE_DIR,
+    logger: console,
+  });
+  console.log(`Rendered ${label} to ${imagePath}.`);
+  return imagePath;
 }
 
 async function fetchCompleteTrades() {
@@ -607,8 +677,14 @@ function buildTradeAnalysis(
 
   return {
     tradeId: String(trade.transaction_id),
+    headlineLabel: "TRADE ALERT",
     leagueName: league?.name?.trim() || "Dynasty League",
     acceptedAtLabel,
+    valueSourceLabel: valueBook?.source ?? "",
+    valueSourceDateLabel: valueBook?.sourceDate
+      ? formatSourceDate(valueBook.sourceDate)
+      : "",
+    verdictSourceLabel: "Best Value",
     historyContext,
     roastText: verdict.roastText,
     teams: teamsWithWinnerFlag,
@@ -1422,6 +1498,24 @@ function parseValueMode(value, fallbackValue) {
   }
 
   return fallbackValue;
+}
+
+function parseTradeNotificationMode(value, fallbackValue) {
+  const normalized = String(value ?? fallbackValue).trim().toLowerCase();
+  if (normalized === "text" || normalized === "image") {
+    return normalized;
+  }
+
+  return fallbackValue;
+}
+
+function isTradeCardAnalysis(value) {
+  return Boolean(
+    value &&
+      typeof value === "object" &&
+      typeof value.tradeId === "string" &&
+      Array.isArray(value.teams)
+  );
 }
 
 function delay(milliseconds) {
