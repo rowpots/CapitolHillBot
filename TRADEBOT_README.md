@@ -63,6 +63,7 @@ These are the important ones:
 - `SNAPCHAT_LOGIN_TIMEOUT_MS`: how long to keep the browser open while login, 2FA, or verification finishes, default `600000`
 - `TRANSACTION_START_ROUND`: first Sleeper transaction round to scan
 - `TRANSACTION_END_ROUND`: last Sleeper transaction round to scan
+- `TRADE_PRIME_TIME_SEND_HOUR_ET`: trades accepted before this Eastern hour are queued until this time, default `16`
 - `DYNASTY_VALUE_MODE`: `auto`, `1qb`, or `2qb`
 - `TRADE_NOTIFICATION_MODE`: `text` or `image`, default `text`
 - `ROAST_MODE`: `true` or `false`
@@ -84,6 +85,12 @@ Start the live bot:
 ```bash
 npm run bot
 ```
+
+Live trades now use a daily prime-time send window:
+
+- trades accepted before `TRADE_PRIME_TIME_SEND_HOUR_ET` queue until that hour in Eastern time
+- trades accepted at or after that hour send immediately
+- after midnight Eastern, the queue window starts over for the new day
 
 Queue a fake trade for the running bot:
 

@@ -35,6 +35,7 @@ const REQUEST_TIMEOUT_MS = 20000;
 const VERDICT_EPSILON = 100;
 const MANUAL_TRIGGER_CHECK_INTERVAL_MS = 5000;
 const REGULAR_SEASON_END_WEEK = 14;
+const EASTERN_TIME_ZONE = "America/New_York";
 
 const credentials = {
   username: process.env.USER_NAME?.trim() ?? "",
@@ -61,6 +62,10 @@ const config = {
   tradeNotificationMode: parseTradeNotificationMode(
     process.env.TRADE_NOTIFICATION_MODE,
     "text"
+  ),
+  tradePrimeTimeSendHourEt: Math.max(
+    0,
+    Math.min(23, parseInteger(process.env.TRADE_PRIME_TIME_SEND_HOUR_ET, 16))
   ),
   roastThreshold: parseInteger(process.env.ROAST_THRESHOLD, 750),
   headless: parseBoolean(process.env.HEADLESS, false),
@@ -138,6 +143,7 @@ async function main() {
   do {
     try {
       await processQueuedManualTestTrade();
+      await flushQueuedTradeNotifications(state);
       await pollForWeeklyReport(weeklyReportState);
       await pollForTrades(state);
     } catch (error) {
@@ -269,7 +275,9 @@ async function pollForTrades(state) {
 
   const trades = await fetchCompleteTrades();
   const newTrades = trades.filter(
-    (trade) => !state.sentTransactionIds.has(String(trade.transaction_id))
+    (trade) =>
+      !state.sentTransactionIds.has(String(trade.transaction_id)) &&
+      !hasQueuedTradeNotification(state, String(trade.transaction_id))
   );
 
   if (newTrades.length === 0) {
@@ -316,6 +324,28 @@ async function pollForTrades(state) {
         valueBook,
         totalRosters,
       });
+
+      const releaseAtTimestampMs = resolveTradeNotificationReleaseAtTimestampMs(
+        trade
+      );
+      if (
+        Number.isFinite(releaseAtTimestampMs) &&
+        releaseAtTimestampMs > Date.now()
+      ) {
+        queueTradeNotification(state, {
+          transactionId: String(trade.transaction_id),
+          acceptedAtTimestampMs: getTradeAcceptedTimestampMs(trade),
+          releaseAtTimestampMs,
+          analysis,
+        });
+        await saveState(state);
+        console.log(
+          `Queued trade ${trade.transaction_id} for ${formatTimestamp(
+            releaseAtTimestampMs
+          )}.`
+        );
+        continue;
+      }
 
       const delivered = await deliverTradeNotification(analysis);
       if (!delivered) {
@@ -461,6 +491,52 @@ async function deliverTradeNotification(analysis) {
   }
 
   return true;
+}
+
+async function flushQueuedTradeNotifications(state) {
+  if (!Array.isArray(state.queuedTradeNotifications)) {
+    state.queuedTradeNotifications = [];
+  }
+
+  const dueNotifications = state.queuedTradeNotifications
+    .filter(
+      (notification) =>
+        Number.isFinite(notification.releaseAtTimestampMs) &&
+        notification.releaseAtTimestampMs <= Date.now()
+    )
+    .sort(compareQueuedTradeNotifications);
+
+  if (dueNotifications.length === 0) {
+    return;
+  }
+
+  console.log(
+    `Releasing ${dueNotifications.length} queued trade notification(s) scheduled for ${formatTradePrimeTimeLabel(
+      config.tradePrimeTimeSendHourEt
+    )}.`
+  );
+
+  for (const notification of dueNotifications) {
+    try {
+      const delivered = await deliverTradeNotification(notification.analysis);
+      if (!delivered) {
+        console.warn(
+          `Queued trade ${notification.transactionId} will stay pending because delivery failed.`
+        );
+        continue;
+      }
+
+      state.sentTransactionIds.add(notification.transactionId);
+      removeQueuedTradeNotification(state, notification.transactionId);
+      await saveState(state);
+      console.log(`Queued trade ${notification.transactionId} recorded as sent.`);
+    } catch (error) {
+      console.error(
+        `Unable to deliver queued trade ${notification.transactionId}.`
+      );
+      console.error(error);
+    }
+  }
 }
 
 async function processQueuedManualTestTrade() {
@@ -1202,12 +1278,16 @@ async function loadState() {
       initialized: Boolean(parsed.initialized),
       initializedAt: parsed.initializedAt ?? null,
       sentTransactionIds: new Set(parsed.sentTransactionIds ?? []),
+      queuedTradeNotifications: normalizeQueuedTradeNotifications(
+        parsed.queuedTradeNotifications
+      ),
     };
   } catch (error) {
     return {
       initialized: false,
       initializedAt: null,
       sentTransactionIds: new Set(),
+      queuedTradeNotifications: [],
     };
   }
 }
@@ -1219,6 +1299,9 @@ async function saveState(state) {
     initialized: state.initialized,
     initializedAt: state.initializedAt,
     sentTransactionIds: Array.from(state.sentTransactionIds).sort(),
+    queuedTradeNotifications: [...(state.queuedTradeNotifications ?? [])].sort(
+      compareQueuedTradeNotifications
+    ),
   };
 
   await fs.writeFile(STATE_FILE, JSON.stringify(serialized, null, 2), "utf8");
@@ -1335,6 +1418,178 @@ function buildRoundsToScan() {
   }
 
   return rounds;
+}
+
+function hasQueuedTradeNotification(state, transactionId) {
+  return (state.queuedTradeNotifications ?? []).some(
+    (notification) => notification.transactionId === transactionId
+  );
+}
+
+function queueTradeNotification(
+  state,
+  { transactionId, acceptedAtTimestampMs, releaseAtTimestampMs, analysis }
+) {
+  if (!Array.isArray(state.queuedTradeNotifications)) {
+    state.queuedTradeNotifications = [];
+  }
+
+  removeQueuedTradeNotification(state, transactionId);
+  state.queuedTradeNotifications.push({
+    transactionId,
+    acceptedAtTimestampMs:
+      Number.isFinite(acceptedAtTimestampMs) ? acceptedAtTimestampMs : null,
+    releaseAtTimestampMs,
+    queuedAt: new Date().toISOString(),
+    analysis,
+  });
+  state.queuedTradeNotifications.sort(compareQueuedTradeNotifications);
+}
+
+function removeQueuedTradeNotification(state, transactionId) {
+  state.queuedTradeNotifications = (state.queuedTradeNotifications ?? []).filter(
+    (notification) => notification.transactionId !== transactionId
+  );
+}
+
+function compareQueuedTradeNotifications(left, right) {
+  const leftReleaseAt = Number(left?.releaseAtTimestampMs ?? 0);
+  const rightReleaseAt = Number(right?.releaseAtTimestampMs ?? 0);
+  if (leftReleaseAt !== rightReleaseAt) {
+    return leftReleaseAt - rightReleaseAt;
+  }
+
+  const leftAcceptedAt = Number(left?.acceptedAtTimestampMs ?? 0);
+  const rightAcceptedAt = Number(right?.acceptedAtTimestampMs ?? 0);
+  if (leftAcceptedAt !== rightAcceptedAt) {
+    return leftAcceptedAt - rightAcceptedAt;
+  }
+
+  return String(left?.transactionId ?? "").localeCompare(
+    String(right?.transactionId ?? ""),
+    "en-US"
+  );
+}
+
+function normalizeQueuedTradeNotifications(value) {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+
+  return value
+    .map((entry) => ({
+      transactionId: String(entry?.transactionId ?? "").trim(),
+      acceptedAtTimestampMs: Number.isFinite(Number(entry?.acceptedAtTimestampMs))
+        ? Number(entry.acceptedAtTimestampMs)
+        : null,
+      releaseAtTimestampMs: Number(entry?.releaseAtTimestampMs),
+      queuedAt: entry?.queuedAt ?? null,
+      analysis: entry?.analysis ?? null,
+    }))
+    .filter(
+      (entry) =>
+        entry.transactionId &&
+        Number.isFinite(entry.releaseAtTimestampMs) &&
+        entry.analysis &&
+        typeof entry.analysis === "object"
+    )
+    .sort(compareQueuedTradeNotifications);
+}
+
+function getTradeAcceptedTimestampMs(trade) {
+  const timestamp = Number(trade?.status_updated ?? trade?.created ?? NaN);
+  return Number.isFinite(timestamp) ? timestamp : null;
+}
+
+function resolveTradeNotificationReleaseAtTimestampMs(trade) {
+  const acceptedAtTimestampMs = getTradeAcceptedTimestampMs(trade);
+  if (!Number.isFinite(acceptedAtTimestampMs)) {
+    return null;
+  }
+
+  const easternParts = getEasternDateParts(new Date(acceptedAtTimestampMs));
+  if (easternParts.hour >= config.tradePrimeTimeSendHourEt) {
+    return null;
+  }
+
+  return getEasternTimestampForLocalDateTime({
+    year: easternParts.year,
+    month: easternParts.month,
+    day: easternParts.day,
+    hour: config.tradePrimeTimeSendHourEt,
+    minute: 0,
+    second: 0,
+  });
+}
+
+function getEasternDateParts(date) {
+  const formatter = new Intl.DateTimeFormat("en-US", {
+    timeZone: EASTERN_TIME_ZONE,
+    weekday: "long",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+    hour12: false,
+  });
+  const parts = formatter.formatToParts(date);
+  const getPart = (type) => parts.find((part) => part.type === type)?.value ?? "";
+
+  return {
+    weekday: getPart("weekday"),
+    year: Number(getPart("year")),
+    month: Number(getPart("month")),
+    day: Number(getPart("day")),
+    hour: Number(getPart("hour")),
+    minute: Number(getPart("minute")),
+    second: Number(getPart("second")),
+  };
+}
+
+function getEasternTimestampForLocalDateTime({
+  year,
+  month,
+  day,
+  hour,
+  minute = 0,
+  second = 0,
+}) {
+  const noonUtcDate = new Date(Date.UTC(year, month - 1, day, 12, 0, 0));
+  const offsetMinutes = getTimeZoneOffsetMinutes(noonUtcDate, EASTERN_TIME_ZONE);
+
+  return (
+    Date.UTC(year, month - 1, day, hour, minute, second) -
+    offsetMinutes * 60 * 1000
+  );
+}
+
+function getTimeZoneOffsetMinutes(date, timeZone) {
+  const formatter = new Intl.DateTimeFormat("en-US", {
+    timeZone,
+    timeZoneName: "shortOffset",
+    hour: "2-digit",
+  });
+  const value =
+    formatter.formatToParts(date).find((part) => part.type === "timeZoneName")
+      ?.value ?? "GMT";
+  const match = value.match(/^GMT([+-])(\d{1,2})(?::?(\d{2}))?$/i);
+  if (!match) {
+    return 0;
+  }
+
+  const sign = match[1] === "-" ? -1 : 1;
+  const hours = Number(match[2] ?? 0);
+  const minutes = Number(match[3] ?? 0);
+  return sign * (hours * 60 + minutes);
+}
+
+function formatTradePrimeTimeLabel(hour24) {
+  const normalizedHour = ((Number(hour24) % 24) + 24) % 24;
+  const hour12 = normalizedHour % 12 || 12;
+  const meridiem = normalizedHour >= 12 ? "PM" : "AM";
+  return `${hour12}:00 ${meridiem} ET`;
 }
 
 function resolveNotificationChatId(audience) {
