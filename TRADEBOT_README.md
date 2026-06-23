@@ -57,7 +57,7 @@ These are the important ones:
 - `USER_PASSWORD`: Snapchat bot account password
 - `SLEEPER_LEAGUE_ID`: league to watch
 - `SNAPCHAT_GROUP_CHAT_ID`: chat to post in
-- `TEST_SNAPCHAT_GROUP_CHAT_ID`: optional separate chat id for one-off testing
+- `TEST_SNAPCHAT_GROUP_CHAT_ID`: optional separate chat id for `npm run test-trade` and preview sends
 - `POLL_INTERVAL_MS`: how often to check Sleeper, default `60000`
 - `SNAPCHAT_STARTUP_TIMEOUT_MS`: how long to wait for Snapchat Web to show either login or chats on startup, default `120000`
 - `SNAPCHAT_LOGIN_TIMEOUT_MS`: how long to keep the browser open while login, 2FA, or verification finishes, default `600000`
@@ -95,6 +95,8 @@ npm run test-trade
 
 - `text`: sends the sample text trade message
 - `image`: sends the sample trade card image
+
+When `TEST_SNAPCHAT_GROUP_CHAT_ID` is set, `npm run test-trade` sends the trade test and optional roast to that test chat instead of the live group chat.
 
 Queue a fake trade without a roast:
 

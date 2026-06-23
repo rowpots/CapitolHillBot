@@ -74,6 +74,7 @@ USER_NAME=<Your Snapchat Username>
 USER_PASSWORD=<Your Snapchat Password>
 SLEEPER_LEAGUE_ID=<Your Sleeper League ID>
 SNAPCHAT_GROUP_CHAT_ID=<Your Snapchat Group Chat ID>
+TEST_SNAPCHAT_GROUP_CHAT_ID=<Optional Test Group Chat ID>
 ```
 
 
@@ -101,6 +102,7 @@ Helpful env flags:
 * `RUN_ONCE=true` performs one poll and exits
 * `POLL_INTERVAL_MS=60000` checks once per minute by default
 * `TRADE_NOTIFICATION_MODE=image` switches trade alerts from text to image cards
+* `TEST_SNAPCHAT_GROUP_CHAT_ID=...` sends `npm run test-trade` to a separate test group chat
 
 If you run into a CAPTCHA when using SnapBot, see this guide for a solution:  
 [Bypass CAPTCHA](https://github.com/Emmanuel-Rods/SnapBot/blob/main/bypass%20captcha.md)

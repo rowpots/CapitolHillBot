@@ -44,6 +44,8 @@ const credentials = {
 const config = {
   sleeperLeagueId: process.env.SLEEPER_LEAGUE_ID?.trim() ?? "",
   snapchatGroupChatId: process.env.SNAPCHAT_GROUP_CHAT_ID?.trim() ?? "",
+  testSnapchatGroupChatId:
+    process.env.TEST_SNAPCHAT_GROUP_CHAT_ID?.trim() ?? "",
   pollIntervalMs: parseInteger(process.env.POLL_INTERVAL_MS, 60000),
   snapchatStartupTimeoutMs: parseInteger(
     process.env.SNAPCHAT_STARTUP_TIMEOUT_MS,
@@ -481,6 +483,7 @@ async function processQueuedManualTestTrade() {
     ? payload.tradeCardAnalysis
     : null;
   const shouldSendRoast = Boolean(payload?.sendRoast) && roastMessage;
+  const targetChatId = resolveNotificationChatId("test");
 
   if (!tradeMessage) {
     console.warn("Manual test trade trigger was empty. Removing it.");
@@ -510,18 +513,24 @@ async function processQueuedManualTestTrade() {
       }
     } else {
       if (config.tradeNotificationMode === "image" && tradeCardAnalysis) {
-        await sendTradeCardMessage(tradeCardAnalysis, "manual test trade card");
+        await sendTradeCardMessage(tradeCardAnalysis, "manual test trade card", {
+          chatId: targetChatId,
+        });
       } else {
         if (config.tradeNotificationMode === "image") {
           console.warn(
             "Manual test trade did not include trade card data. Falling back to text delivery."
           );
         }
-        await sendChatMessage(tradeMessage, "manual test trade message");
+        await sendChatMessage(tradeMessage, "manual test trade message", {
+          chatId: targetChatId,
+        });
       }
 
       if (shouldSendRoast) {
-        await sendChatMessage(roastMessage, "manual test roast message");
+        await sendChatMessage(roastMessage, "manual test roast message", {
+          chatId: targetChatId,
+        });
       }
     }
 
@@ -534,25 +543,27 @@ async function processQueuedManualTestTrade() {
   }
 }
 
-async function sendChatMessage(message, label) {
+async function sendChatMessage(message, label, { chatId } = {}) {
+  const targetChatId = chatId || resolveNotificationChatId("live");
   await ensureSnapchatSessionReady();
   await bot.openMessagingHome();
   await bot.sendMessage({
-    chat: config.snapchatGroupChatId,
+    chat: targetChatId,
     message,
     exit: false,
   });
-  console.log(`Sent ${label}.`);
+  console.log(`Sent ${label} to ${describeNotificationChat(targetChatId)}.`);
 }
 
-async function sendTradeCardMessage(analysis, label) {
+async function sendTradeCardMessage(analysis, label, { chatId } = {}) {
+  const targetChatId = chatId || resolveNotificationChatId("live");
   const imagePath = await renderTradeCardForDelivery(analysis, label);
   await ensureSnapchatSessionReady();
   await bot.sendTradeCard({
-    chatId: config.snapchatGroupChatId,
+    chatId: targetChatId,
     imagePath,
   });
-  console.log(`Sent ${label}.`);
+  console.log(`Sent ${label} to ${describeNotificationChat(targetChatId)}.`);
 }
 
 async function renderTradeCardForDelivery(analysis, label) {
@@ -1324,6 +1335,32 @@ function buildRoundsToScan() {
   }
 
   return rounds;
+}
+
+function resolveNotificationChatId(audience) {
+  if (audience === "test") {
+    if (config.testSnapchatGroupChatId) {
+      return config.testSnapchatGroupChatId;
+    }
+
+    console.warn(
+      "TEST_SNAPCHAT_GROUP_CHAT_ID is not set. Falling back to SNAPCHAT_GROUP_CHAT_ID for this test send."
+    );
+  }
+
+  return config.snapchatGroupChatId;
+}
+
+function describeNotificationChat(chatId) {
+  if (chatId === config.testSnapchatGroupChatId) {
+    return "the test chat";
+  }
+
+  if (chatId === config.snapchatGroupChatId) {
+    return "the main chat";
+  }
+
+  return `chat ${chatId}`;
 }
 
 function validateEnvironment() {
