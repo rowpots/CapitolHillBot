@@ -73,6 +73,8 @@ These are the important ones:
 - `WEEKLY_REPORT_SIMULATION_COUNT`: Monte Carlo runs for playoff odds, default `10000`
 - `POWER_RANKINGS_ENABLED`: `true` or `false`, default `true`
 - `POWER_RANKING_SEND_HOUR_ET`: Thursday send hour in Eastern time, default `19` (7 PM)
+- `PLAYOFF_ALERTS_ENABLED`: playoff clinch/elimination alerts, `true` or `false`, default `true`
+- `RECORD_BOOK_ENABLED`: all-time record-book alerts, `true` or `false`, default `true`
 - `HEADLESS`: `false` is easier for debugging
 - `DRY_RUN`: `true` logs instead of sending to Snapchat
 - `RUN_ONCE`: `true` checks once and exits
@@ -253,6 +255,42 @@ npm run preview-power-rankings -- --previous --week 14
 
 Add `--send` (and optionally `--chat-id`) to deliver it to the test chat. Weights live as tunable
 constants at the top of [weekly-report.js](c:/Users/rowan/OneDrive/Desktop/tradebot/SnapBot/weekly-report.js).
+
+## Milestone Alerts
+
+The bot also watches for two kinds of "significant moment" and announces them — but **spread out**,
+not all at once. When a week's results are final (the Tuesday computation), it detects events and
+queues each with a release time in a daytime Eastern-time slot, so they drip out one at a time
+across the days before the next games instead of dogpiling the recap.
+
+- **Playoff clinch / elimination** — when a team clinches a playoff spot, clinches a first-round
+  bye, or is eliminated. Only evaluated from Week 8 on (earlier reads aren't reliable). Toggle with
+  `PLAYOFF_ALERTS_ENABLED`.
+- **All-time record book** — fires only when a league record breaks: highest single-week score,
+  lowest single-week score, biggest blowout, or longest win streak. Records are seeded across every
+  prior season via Sleeper's `previous_league_id` chain (regular-season weeks). Toggle with
+  `RECORD_BOOK_ENABLED`.
+
+```text
+🎉 Team Rowan has clinched a playoff spot!
+
+🏆 NEW LEAGUE RECORD
+Highest score ever — Team Rowan: 189.4
+Previous: 184.2 (Capitol Crushers, 2024 Wk 6)
+```
+
+On first run the bot **silently baselines** (records current clinches and seeds the record book) so
+it never announces things that already happened before it started watching. State lives in
+`.state/milestone-state.json` and `.state/record-book.json`.
+
+Preview what a whole season would have fired (no Snapchat) — it seeds from prior seasons and replays
+week by week:
+
+```bash
+npm run preview-milestones -- --previous
+```
+
+Add `--send` to push one sample event to the test chat.
 
 ## Trade Message Format
 

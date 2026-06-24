@@ -17,6 +17,12 @@ import {
   isThursdayAfterHourInEastern,
   isTuesdayAfterHourInEastern,
 } from "./weekly-report.js";
+import {
+  buildRecordBookFromHistory,
+  createEmptyMilestoneState,
+  createEmptyRecordBook,
+  detectMilestones,
+} from "./milestones.js";
 
 dotenv.config();
 installTimestampedConsole();
@@ -35,6 +41,8 @@ const POWER_RANKINGS_STATE_FILE = path.join(
   STATE_DIR,
   "power-rankings-state.json"
 );
+const MILESTONE_STATE_FILE = path.join(STATE_DIR, "milestone-state.json");
+const RECORD_BOOK_FILE = path.join(STATE_DIR, "record-book.json");
 const MANUAL_TEST_TRIGGER_FILE = path.join(STATE_DIR, "manual-test-trade.json");
 const PLAYERS_CACHE_FILE = path.join(STATE_DIR, "players-nfl.json");
 const PLAYERS_CACHE_TTL_MS = 24 * 60 * 60 * 1000;
@@ -96,6 +104,8 @@ const config = {
     0,
     Math.min(23, parseInteger(process.env.POWER_RANKING_SEND_HOUR_ET, 19))
   ),
+  playoffAlertsEnabled: parseBoolean(process.env.PLAYOFF_ALERTS_ENABLED, true),
+  recordBookEnabled: parseBoolean(process.env.RECORD_BOOK_ENABLED, true),
 };
 
 const bot = new SnapBot();
@@ -158,6 +168,7 @@ async function main() {
     try {
       await processQueuedManualTestTrade();
       await flushQueuedTradeNotifications(state);
+      await flushMilestones();
       await pollForWeeklyReport(weeklyReportState);
       await pollForPowerRankings(powerRankingsState);
       await pollForTrades(state);
@@ -449,6 +460,18 @@ async function pollForWeeklyReport(weeklyReportState) {
     week: latestCompletedWeek,
   });
 
+  // Detect playoff clinch/elimination + broken records from this week's results
+  // and queue them with spread-out release times. Does not send here.
+  await refreshMilestones({
+    league,
+    season,
+    rosters,
+    users,
+    matchupsByWeek,
+    report,
+    latestCompletedWeek,
+  });
+
   if (config.dryRun) {
     console.log(`[Dry Run] ${report.textMessage}`);
     if (recap) {
@@ -573,6 +596,167 @@ async function pollForPowerRankings(powerRankingsState) {
     order: powerRankings.order,
   };
   await savePowerRankingsState(powerRankingsState);
+}
+
+async function refreshMilestones({
+  league,
+  season,
+  rosters,
+  users,
+  matchupsByWeek,
+  report,
+  latestCompletedWeek,
+}) {
+  if (!config.playoffAlertsEnabled && !config.recordBookEnabled) {
+    return;
+  }
+
+  const milestoneState = await loadMilestoneState();
+  let recordBook = await loadRecordBook();
+
+  // Seed the all-time record book once (retried until it succeeds).
+  if (config.recordBookEnabled && !recordBook.seededFromHistory) {
+    try {
+      recordBook = await buildRecordBookFromHistory({
+        league,
+        fetchJson,
+        regularSeasonEndWeek: REGULAR_SEASON_END_WEEK,
+        currentThroughWeek: latestCompletedWeek,
+        logger: console,
+      });
+      await saveRecordBook(recordBook);
+    } catch (error) {
+      console.warn("Record book history seeding failed; will retry next week.");
+      console.warn(error.message);
+    }
+  }
+
+  // First time we see this season: silently baseline so we never backfill-spam
+  // clinches/records that already happened before the bot started watching.
+  if (milestoneState.season !== season) {
+    const baseline = baselineMilestoneState({
+      report,
+      season,
+      latestCompletedWeek,
+      queue: milestoneState.queue,
+    });
+    await saveMilestoneState(baseline);
+    console.log(
+      `Milestone tracking baselined for season ${season} through week ${latestCompletedWeek}.`
+    );
+    return;
+  }
+
+  if (milestoneState.detectedThroughWeek >= latestCompletedWeek) {
+    return;
+  }
+
+  const { events, milestoneState: updatedState, recordBook: updatedBook } =
+    detectMilestones({
+      report,
+      matchupsByWeek,
+      rosters,
+      users,
+      latestCompletedWeek,
+      season,
+      nowMs: Date.now(),
+      milestoneState,
+      recordBook,
+      playoffAlertsEnabled: config.playoffAlertsEnabled,
+      recordBookEnabled: config.recordBookEnabled,
+    });
+
+  if (config.dryRun) {
+    if (events.length === 0) {
+      console.log("[Dry Run] No new milestones this week.");
+    }
+    for (const event of events) {
+      console.log(
+        `[Dry Run] Queued milestone (${formatTimestamp(
+          event.releaseAtTimestampMs
+        )}): ${event.message.replace(/\n/g, " / ")}`
+      );
+    }
+    return;
+  }
+
+  await saveMilestoneState(updatedState);
+  await saveRecordBook(updatedBook);
+
+  if (events.length > 0) {
+    console.log(
+      `Queued ${events.length} milestone message(s) to release through the week.`
+    );
+  }
+}
+
+async function flushMilestones() {
+  if (!config.playoffAlertsEnabled && !config.recordBookEnabled) {
+    return;
+  }
+
+  const milestoneState = await loadMilestoneState();
+  const queue = Array.isArray(milestoneState.queue) ? milestoneState.queue : [];
+  const due = queue
+    .filter(
+      (event) =>
+        Number.isFinite(event?.releaseAtTimestampMs) &&
+        event.releaseAtTimestampMs <= Date.now()
+    )
+    .sort((left, right) => left.releaseAtTimestampMs - right.releaseAtTimestampMs);
+
+  if (due.length === 0) {
+    return;
+  }
+
+  for (const event of due) {
+    if (config.dryRun) {
+      console.log(`[Dry Run] Milestone: ${event.message.replace(/\n/g, " / ")}`);
+      milestoneState.queue = milestoneState.queue.filter((item) => item.id !== event.id);
+      continue;
+    }
+
+    try {
+      await sendChatMessage(event.message, `milestone ${event.type}`);
+      milestoneState.queue = milestoneState.queue.filter((item) => item.id !== event.id);
+      await saveMilestoneState(milestoneState);
+    } catch (error) {
+      console.warn(`Milestone send failed for ${event.id}; staying queued.`);
+      console.warn(error.message);
+    }
+  }
+
+  if (config.dryRun) {
+    await saveMilestoneState(milestoneState);
+  }
+}
+
+function baselineMilestoneState({ report, season, latestCompletedWeek, queue }) {
+  const clinched = [];
+  const byeClinched = [];
+  const eliminated = [];
+
+  for (const team of report?.standings ?? []) {
+    const id = String(team.rosterId);
+    if (team.playoffOdds >= 0.9999) {
+      clinched.push(id);
+    }
+    if ((team.byeOdds ?? 0) >= 0.9999) {
+      byeClinched.push(id);
+    }
+    if (team.playoffOdds <= 0.0001) {
+      eliminated.push(id);
+    }
+  }
+
+  return {
+    season,
+    detectedThroughWeek: latestCompletedWeek,
+    clinched,
+    byeClinched,
+    eliminated,
+    queue: Array.isArray(queue) ? queue : [],
+  };
 }
 
 async function deliverTradeNotification(analysis) {
@@ -1515,6 +1699,68 @@ async function savePowerRankingsState(state) {
     JSON.stringify(serialized, null, 2),
     "utf8"
   );
+}
+
+async function loadMilestoneState() {
+  await fs.mkdir(STATE_DIR, { recursive: true });
+
+  try {
+    const fileContents = await fs.readFile(MILESTONE_STATE_FILE, "utf8");
+    const parsed = parseJsonFile(fileContents);
+    const base = createEmptyMilestoneState();
+
+    return {
+      season: parsed?.season ?? null,
+      detectedThroughWeek: Number(parsed?.detectedThroughWeek) || 0,
+      clinched: Array.isArray(parsed?.clinched) ? parsed.clinched.map(String) : [],
+      byeClinched: Array.isArray(parsed?.byeClinched)
+        ? parsed.byeClinched.map(String)
+        : [],
+      eliminated: Array.isArray(parsed?.eliminated)
+        ? parsed.eliminated.map(String)
+        : [],
+      queue: Array.isArray(parsed?.queue) ? parsed.queue : base.queue,
+    };
+  } catch (error) {
+    return createEmptyMilestoneState();
+  }
+}
+
+async function saveMilestoneState(state) {
+  await fs.mkdir(STATE_DIR, { recursive: true });
+
+  const serialized = {
+    updatedAt: new Date().toISOString(),
+    season: state.season ?? null,
+    detectedThroughWeek: Number(state.detectedThroughWeek) || 0,
+    clinched: state.clinched ?? [],
+    byeClinched: state.byeClinched ?? [],
+    eliminated: state.eliminated ?? [],
+    queue: state.queue ?? [],
+  };
+
+  await fs.writeFile(
+    MILESTONE_STATE_FILE,
+    JSON.stringify(serialized, null, 2),
+    "utf8"
+  );
+}
+
+async function loadRecordBook() {
+  await fs.mkdir(STATE_DIR, { recursive: true });
+
+  try {
+    const fileContents = await fs.readFile(RECORD_BOOK_FILE, "utf8");
+    const parsed = parseJsonFile(fileContents);
+    return { ...createEmptyRecordBook(), ...parsed };
+  } catch (error) {
+    return createEmptyRecordBook();
+  }
+}
+
+async function saveRecordBook(book) {
+  await fs.mkdir(STATE_DIR, { recursive: true });
+  await fs.writeFile(RECORD_BOOK_FILE, JSON.stringify(book, null, 2), "utf8");
 }
 
 function hasSentWeeklyReport(state, season, week) {

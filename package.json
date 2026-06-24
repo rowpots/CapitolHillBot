@@ -10,6 +10,7 @@
     "test-trade": "node test-trade.js",
     "preview-weekly-report": "node preview-weekly-report.js",
     "preview-power-rankings": "node preview-power-rankings.js",
+    "preview-milestones": "node preview-milestones.js",
     "preview-trade-card": "node preview-trade-card.js"
   },
   "author": "Roger Rodrigues",

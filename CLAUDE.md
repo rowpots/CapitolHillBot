@@ -4,6 +4,22 @@ Node (ESM) bot that watches a Sleeper dynasty league and posts into a Snapchat g
 Puppeteer (Snapchat Web automation). See [TRADEBOT_README.md](TRADEBOT_README.md) for the full
 user-facing guide and env reference.
 
+## ⏭️ WHERE WE LEFT OFF (next session)
+
+The **milestone alerts** (playoff clinch/elimination + all-time record book) are built and pass the
+replay preview, but they are **NOT committed** and have **NOT been sent to a real Snapchat chat yet**.
+
+**Next thing to do: test the new stuff in the test group chat before committing.**
+
+1. `npm run preview-milestones -- --previous --send` — drop a sample milestone message in the test
+   chat and check the formatting looks good on the phone.
+2. Re-check the power-rankings + recap formatting in the test chat if desired
+   (`npm run preview-power-rankings -- --previous --week 14 --send`).
+3. Once the formats look good, commit (Tuesday recap + standings reformat are already committed;
+   the **power-rankings** commit `a75454d` is in, but the **milestone alerts** changes are still
+   uncommitted — `milestones.js`, `preview-milestones.js`, and edits to `index.js` /
+   `weekly-report.js` / `package.json` / docs).
+
 ## Running / testing
 
 - Always run from this `SnapBot/` directory — `.env` lives here and `dotenv` loads from cwd.
@@ -46,6 +62,27 @@ in `weekly-report.js`; scheduled via `pollForPowerRankings` in `index.js` (mirro
 `40% PPG + 25% all-play win% + 20% actual win% + 15% recent form (last 3 wks)` — weights are tunable
 consts (`POWER_RANKING_WEIGHTS`) at the top of `weekly-report.js`. No dynasty-value dependency.
 Preview/test with `npm run preview-power-rankings` (derives arrows by diffing week W vs W-1).
+
+## Milestone alerts (playoff clinch/elimination + all-time record book)
+
+Event-driven, in `milestones.js`. Detected once when a week's results are final (called from
+`refreshMilestones` inside `pollForWeeklyReport`, reusing the already-fetched matchups +
+`report.standings`), then each event is queued with a daytime ET release slot (`computeReleaseSlots`)
+so they **drip out one at a time** between Tue and the next games instead of dogpiling the recap.
+`flushMilestones` (in the main loop) sends due events best-effort.
+
+- **Playoff clinch/bye/elimination** from `report.standings` playoff odds (100%/0% Monte Carlo
+  proxy), gated to Week ≥ 8 (`PLAYOFF_ALERT_MIN_WEEK`). `PLAYOFF_ALERTS_ENABLED`.
+- **Record book** (highest/lowest week score, biggest blowout, longest win streak ≥ 4): one
+  candidate per record per week; seeded all-time from the `previous_league_id` chain
+  (`buildRecordBookFromHistory`, regular-season weeks). `RECORD_BOOK_ENABLED`.
+- **First run is silent**: `baselineMilestoneState` records current clinches + seeds the book and
+  sets `detectedThroughWeek`, so nothing already-passed is announced. Reset per season.
+- State: `.state/milestone-state.json` (season, detectedThroughWeek, clinched/byeClinched/eliminated,
+  queue) + `.state/record-book.json`. These are loaded/saved per-call (file-backed), not threaded
+  through the loop. Depends on `WEEKLY_REPORTS_ENABLED` (that's where playoff odds are computed).
+- Preview/test: `npm run preview-milestones -- --previous` replays a season week-by-week (forces an
+  empty book so the mechanism is visible); `--send` pushes one sample to the test chat.
 
 ## Weekly report + recap (Tuesdays)
 

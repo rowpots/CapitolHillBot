@@ -691,7 +691,7 @@ function getWinPercentage(team) {
   return (team.wins + team.ties * 0.5) / team.gamesPlayed;
 }
 
-function groupWeekEntriesByMatchup(entries) {
+export function groupWeekEntriesByMatchup(entries) {
   const grouped = new Map();
 
   for (const entry of entries) {
@@ -709,7 +709,7 @@ function groupWeekEntriesByMatchup(entries) {
   return grouped;
 }
 
-function normalizeWeekEntries(entries) {
+export function normalizeWeekEntries(entries) {
   return entries
     .map((entry) => ({
       rosterId: String(entry?.roster_id ?? ""),
@@ -743,15 +743,15 @@ function clampWeek(week, regularSeasonEndWeek) {
   return Math.max(0, Math.min(regularSeasonEndWeek, Math.trunc(numericWeek)));
 }
 
-function buildRosterLookup(rosters) {
+export function buildRosterLookup(rosters) {
   return new Map(rosters.map((roster) => [String(roster.roster_id), roster]));
 }
 
-function buildUserLookup(users) {
+export function buildUserLookup(users) {
   return new Map(users.map((user) => [String(user.user_id), user]));
 }
 
-function formatRosterLabel(rosterId, rosterLookup, userLookup) {
+export function formatRosterLabel(rosterId, rosterLookup, userLookup) {
   const roster = rosterLookup.get(String(rosterId));
   const owner = roster ? userLookup.get(String(roster.owner_id)) : null;
   const teamName = owner?.metadata?.team_name?.trim();
