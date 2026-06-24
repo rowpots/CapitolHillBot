@@ -4,6 +4,15 @@ const DEFAULT_PLAYOFF_TEAM_COUNT = 6;
 const DEFAULT_TEAM_NAME_MAX_LENGTH = 24;
 const EASTERN_TIME_ZONE = "America/New_York";
 const STANDINGS_DIVIDER = "———————————————————————————";
+const POWER_RANKING_WEIGHTS = {
+  scoring: 0.4,
+  allPlay: 0.25,
+  winPct: 0.2,
+  recentForm: 0.15,
+};
+const POWER_RANKING_RECENT_WEEKS = 3;
+const POWER_SCORE_MIN = 40;
+const POWER_SCORE_MAX = 99;
 
 export function buildWeeklyReport({
   league,
@@ -266,9 +275,131 @@ function formatMatchupLine({ winner, loser, margin, isTie }) {
   return `${winnerLabel} def. ${loserLabel} by ${formatOneDecimal(margin)}`;
 }
 
-export function isTuesdayAfterHourInEastern(date, hour24) {
+export function buildPowerRankings({
+  league,
+  rosters,
+  users,
+  matchupsByWeek,
+  throughWeek,
+  week,
+  previousOrder = [],
+}) {
+  const numericThroughWeek = Number(throughWeek);
+  if (!Number.isFinite(numericThroughWeek) || numericThroughWeek < 1) {
+    return null;
+  }
+
+  // The display week is the week these rankings are *for* (the upcoming slate),
+  // which is one past the last completed week unless caller overrides it.
+  const displayWeek = Number.isFinite(Number(week))
+    ? Number(week)
+    : numericThroughWeek + 1;
+
+  const rosterLookup = buildRosterLookup(rosters);
+  const userLookup = buildUserLookup(users);
+  const standings = buildStandings({
+    rosters,
+    rosterLookup,
+    userLookup,
+    matchupsByWeek,
+    throughWeek: numericThroughWeek,
+  });
+
+  if (!standings.some((team) => team.gamesPlayed > 0)) {
+    return null;
+  }
+
+  const allPlayByRosterId = computeAllPlayWinPct(matchupsByWeek, numericThroughWeek);
+
+  const metrics = standings.map((team) => ({
+    rosterId: team.rosterId,
+    label: team.label,
+    ppg: team.gamesPlayed > 0 ? team.pointsFor / team.gamesPlayed : 0,
+    recentForm: average(team.weeklyScores.slice(-POWER_RANKING_RECENT_WEEKS)),
+    winPct: getWinPercentage(team),
+    allPlay: allPlayByRosterId.get(team.rosterId) ?? 0,
+  }));
+
+  const ppgNorm = buildMinMaxNormalizer(metrics.map((m) => m.ppg));
+  const recentNorm = buildMinMaxNormalizer(metrics.map((m) => m.recentForm));
+
+  const scored = metrics.map((m) => ({
+    ...m,
+    composite:
+      POWER_RANKING_WEIGHTS.scoring * ppgNorm(m.ppg) +
+      POWER_RANKING_WEIGHTS.allPlay * m.allPlay +
+      POWER_RANKING_WEIGHTS.winPct * m.winPct +
+      POWER_RANKING_WEIGHTS.recentForm * recentNorm(m.recentForm),
+  }));
+
+  const scoreNorm = buildMinMaxNormalizer(scored.map((m) => m.composite));
+  const previousRankByRosterId = new Map(
+    (Array.isArray(previousOrder) ? previousOrder : []).map((rosterId, index) => [
+      String(rosterId),
+      index + 1,
+    ])
+  );
+
+  const ranked = scored
+    .map((m) => ({
+      ...m,
+      score:
+        POWER_SCORE_MIN +
+        scoreNorm(m.composite) * (POWER_SCORE_MAX - POWER_SCORE_MIN),
+    }))
+    .sort(comparePowerTeams)
+    .map((team, index) => {
+      const rank = index + 1;
+      const previousRank = previousRankByRosterId.get(String(team.rosterId));
+      return {
+        rosterId: team.rosterId,
+        label: team.label,
+        score: team.score,
+        rank,
+        movement: previousRank ? previousRank - rank : null,
+      };
+    });
+
+  const result = {
+    leagueName: league?.name?.trim() || "Fantasy League",
+    week: displayWeek,
+    throughWeek: numericThroughWeek,
+    teams: ranked,
+    order: ranked.map((team) => team.rosterId),
+  };
+  result.textMessage = formatPowerRankingsMessage(result);
+  return result;
+}
+
+export function formatPowerRankingsMessage({ leagueName, week, teams }) {
+  const blocks = teams.map(
+    (team) =>
+      `${formatRankPrefix(team.rank)} ${truncateLabel(
+        team.label,
+        DEFAULT_TEAM_NAME_MAX_LENGTH
+      )}   ${formatOneDecimal(team.score)}  ${formatMovement(team.movement)}`
+  );
+
+  const header = [
+    `📈 ${leagueName} Week ${week} Power Rankings`,
+    STANDINGS_DIVIDER,
+    "Score /100  ·  ↑↓ vs last week",
+  ];
+
+  return `${header.join("\n")}\n\n${blocks.join("\n\n")}`;
+}
+
+export function isWeekdayAfterHourInEastern(date, weekday, hour24) {
   const parts = getEasternDateParts(date);
-  return parts.weekday === "Tuesday" && parts.hour >= hour24;
+  return parts.weekday === weekday && parts.hour >= hour24;
+}
+
+export function isTuesdayAfterHourInEastern(date, hour24) {
+  return isWeekdayAfterHourInEastern(date, "Tuesday", hour24);
+}
+
+export function isThursdayAfterHourInEastern(date, hour24) {
+  return isWeekdayAfterHourInEastern(date, "Thursday", hour24);
 }
 
 function buildStandings({
@@ -674,6 +805,86 @@ function formatRankPrefix(rank) {
 
 function formatPointsForDisplay(value) {
   return String(Math.round(Number(value) || 0));
+}
+
+function formatMovement(movement) {
+  if (!Number.isFinite(movement) || movement === 0) {
+    return "—";
+  }
+
+  return movement > 0 ? `↑${movement}` : `↓${Math.abs(movement)}`;
+}
+
+function computeAllPlayWinPct(matchupsByWeek, throughWeek) {
+  const allPlayWins = new Map();
+  const allPlayGames = new Map();
+
+  for (let week = 1; week <= throughWeek; week += 1) {
+    const entries = normalizeWeekEntries(matchupsByWeek?.[week] ?? []);
+    if (entries.length < 2) {
+      continue;
+    }
+
+    for (const entry of entries) {
+      let credit = 0;
+      for (const other of entries) {
+        if (other === entry) {
+          continue;
+        }
+
+        if (entry.points > other.points) {
+          credit += 1;
+        } else if (Math.abs(entry.points - other.points) < 0.0001) {
+          credit += 0.5;
+        }
+      }
+
+      allPlayWins.set(entry.rosterId, (allPlayWins.get(entry.rosterId) ?? 0) + credit);
+      allPlayGames.set(
+        entry.rosterId,
+        (allPlayGames.get(entry.rosterId) ?? 0) + (entries.length - 1)
+      );
+    }
+  }
+
+  const winPctByRosterId = new Map();
+  for (const [rosterId, games] of allPlayGames.entries()) {
+    winPctByRosterId.set(rosterId, games > 0 ? allPlayWins.get(rosterId) / games : 0);
+  }
+
+  return winPctByRosterId;
+}
+
+function buildMinMaxNormalizer(values) {
+  const finite = values.filter((value) => Number.isFinite(value));
+  const min = finite.length ? Math.min(...finite) : 0;
+  const max = finite.length ? Math.max(...finite) : 0;
+  const range = max - min;
+
+  return (value) => {
+    if (range <= 0 || !Number.isFinite(value)) {
+      // Everyone equal (or no spread): treat as the middle of the band.
+      return range <= 0 ? 0.5 : 0;
+    }
+
+    return (value - min) / range;
+  };
+}
+
+function comparePowerTeams(left, right) {
+  if (right.composite !== left.composite) {
+    return right.composite - left.composite;
+  }
+
+  if (right.ppg !== left.ppg) {
+    return right.ppg - left.ppg;
+  }
+
+  if (right.winPct !== left.winPct) {
+    return right.winPct - left.winPct;
+  }
+
+  return left.label.localeCompare(right.label, "en-US");
 }
 
 function formatPercent(value) {

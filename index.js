@@ -10,9 +10,11 @@ import { getRoastForSeverity } from "./roast-templates.js";
 import SnapBot from "./snapbot.js";
 import { renderTradeCardImage } from "./trade-card.js";
 import {
+  buildPowerRankings,
   buildWeeklyRecap,
   buildWeeklyReport,
   findLatestCompletedWeek,
+  isThursdayAfterHourInEastern,
   isTuesdayAfterHourInEastern,
 } from "./weekly-report.js";
 
@@ -28,6 +30,10 @@ const TRADE_HISTORY_FILE = path.join(STATE_DIR, "trade-history.json");
 const WEEKLY_REPORT_STATE_FILE = path.join(
   STATE_DIR,
   "weekly-report-state.json"
+);
+const POWER_RANKINGS_STATE_FILE = path.join(
+  STATE_DIR,
+  "power-rankings-state.json"
 );
 const MANUAL_TEST_TRIGGER_FILE = path.join(STATE_DIR, "manual-test-trade.json");
 const PLAYERS_CACHE_FILE = path.join(STATE_DIR, "players-nfl.json");
@@ -85,6 +91,11 @@ const config = {
     1000,
     parseInteger(process.env.WEEKLY_REPORT_SIMULATION_COUNT, 10000)
   ),
+  powerRankingsEnabled: parseBoolean(process.env.POWER_RANKINGS_ENABLED, true),
+  powerRankingSendHourEt: Math.max(
+    0,
+    Math.min(23, parseInteger(process.env.POWER_RANKING_SEND_HOUR_ET, 19))
+  ),
 };
 
 const bot = new SnapBot();
@@ -116,6 +127,7 @@ async function main() {
 
   const state = await loadState();
   const weeklyReportState = await loadWeeklyReportState();
+  const powerRankingsState = await loadPowerRankingsState();
 
   if (!config.dryRun) {
     await startSnapchatSession();
@@ -147,6 +159,7 @@ async function main() {
       await processQueuedManualTestTrade();
       await flushQueuedTradeNotifications(state);
       await pollForWeeklyReport(weeklyReportState);
+      await pollForPowerRankings(powerRankingsState);
       await pollForTrades(state);
     } catch (error) {
       console.error("Polling cycle failed, but the bot will keep running.");
@@ -469,6 +482,97 @@ async function pollForWeeklyReport(weeklyReportState) {
     leagueId: config.sleeperLeagueId,
   });
   await saveWeeklyReportState(weeklyReportState);
+}
+
+async function pollForPowerRankings(powerRankingsState) {
+  if (!config.powerRankingsEnabled) {
+    return;
+  }
+
+  const now = new Date();
+  if (!isThursdayAfterHourInEastern(now, config.powerRankingSendHourEt)) {
+    return;
+  }
+
+  const league = await fetchJson(
+    `https://api.sleeper.app/v1/league/${config.sleeperLeagueId}`
+  );
+  const season = String(league?.season ?? "").trim();
+
+  if (!season) {
+    console.warn("Power rankings skipped because the Sleeper season is unavailable.");
+    return;
+  }
+
+  const matchupsByWeek = await fetchMatchupsByWeek({
+    leagueId: config.sleeperLeagueId,
+    startWeek: 1,
+    endWeek: REGULAR_SEASON_END_WEEK,
+  });
+  const latestCompletedWeek = findLatestCompletedWeek(
+    matchupsByWeek,
+    REGULAR_SEASON_END_WEEK
+  );
+
+  // The rankings posted on a Thursday are for the upcoming slate, so the
+  // display week is one past the last completed week. We post for Weeks 2-14
+  // (Week 1 has no games played yet to rank from).
+  const displayWeek = latestCompletedWeek + 1;
+  if (latestCompletedWeek < 1 || displayWeek > REGULAR_SEASON_END_WEEK) {
+    return;
+  }
+
+  if (hasSentWeeklyReport(powerRankingsState, season, displayWeek)) {
+    return;
+  }
+
+  const [rosters, users] = await Promise.all([
+    fetchJson(`https://api.sleeper.app/v1/league/${config.sleeperLeagueId}/rosters`),
+    fetchJson(`https://api.sleeper.app/v1/league/${config.sleeperLeagueId}/users`),
+  ]);
+
+  // Movement is measured against the last ranking we sent, but only when it was
+  // for this same season.
+  const previousOrder =
+    powerRankingsState.lastRanking?.season === season
+      ? powerRankingsState.lastRanking?.order ?? []
+      : [];
+
+  const powerRankings = buildPowerRankings({
+    league,
+    rosters,
+    users,
+    matchupsByWeek,
+    throughWeek: latestCompletedWeek,
+    week: displayWeek,
+    previousOrder,
+  });
+
+  if (!powerRankings) {
+    return;
+  }
+
+  if (config.dryRun) {
+    console.log(`[Dry Run] ${powerRankings.textMessage}`);
+    return;
+  }
+
+  await sendChatMessage(
+    powerRankings.textMessage,
+    `power rankings for week ${displayWeek}`
+  );
+
+  markWeeklyReportSent(powerRankingsState, {
+    season,
+    week: displayWeek,
+    leagueId: config.sleeperLeagueId,
+  });
+  powerRankingsState.lastRanking = {
+    season,
+    week: displayWeek,
+    order: powerRankings.order,
+  };
+  await savePowerRankingsState(powerRankingsState);
 }
 
 async function deliverTradeNotification(analysis) {
@@ -1373,6 +1477,41 @@ async function saveWeeklyReportState(state) {
 
   await fs.writeFile(
     WEEKLY_REPORT_STATE_FILE,
+    JSON.stringify(serialized, null, 2),
+    "utf8"
+  );
+}
+
+async function loadPowerRankingsState() {
+  await fs.mkdir(STATE_DIR, { recursive: true });
+
+  try {
+    const fileContents = await fs.readFile(POWER_RANKINGS_STATE_FILE, "utf8");
+    const parsed = parseJsonFile(fileContents);
+
+    return {
+      sentBySeason: parsed?.sentBySeason ?? {},
+      lastRanking: parsed?.lastRanking ?? null,
+    };
+  } catch (error) {
+    return {
+      sentBySeason: {},
+      lastRanking: null,
+    };
+  }
+}
+
+async function savePowerRankingsState(state) {
+  await fs.mkdir(STATE_DIR, { recursive: true });
+
+  const serialized = {
+    updatedAt: new Date().toISOString(),
+    sentBySeason: state.sentBySeason ?? {},
+    lastRanking: state.lastRanking ?? null,
+  };
+
+  await fs.writeFile(
+    POWER_RANKINGS_STATE_FILE,
     JSON.stringify(serialized, null, 2),
     "utf8"
   );

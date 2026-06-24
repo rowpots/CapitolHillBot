@@ -35,6 +35,18 @@ user-facing guide and env reference.
 - Multi-line messages are typed with Shift+Enter per newline, so leading blank lines in a message
   string render as real spacing.
 
+## Power rankings (Thursdays)
+
+Posted Thursdays at `POWER_RANKING_SEND_HOUR_ET` (default 19), **Weeks 2–14**, once per week,
+tracked in `.state/power-rankings-state.json` (also stores `lastRanking.order` for movement
+arrows). Each post is titled for the upcoming week (`displayWeek = latestCompletedWeek + 1`) and
+ranks through the last completed week; Week 1 is skipped (no games played yet). Power-rankings only — no recap. Built by `buildPowerRankings` / `formatPowerRankingsMessage`
+in `weekly-report.js`; scheduled via `pollForPowerRankings` in `index.js` (mirrors
+`pollForWeeklyReport`, best-effort send). Composite power score (0–100, mapped to a 40–99 band):
+`40% PPG + 25% all-play win% + 20% actual win% + 15% recent form (last 3 wks)` — weights are tunable
+consts (`POWER_RANKING_WEIGHTS`) at the top of `weekly-report.js`. No dynasty-value dependency.
+Preview/test with `npm run preview-power-rankings` (derives arrows by diffing week W vs W-1).
+
 ## Weekly report + recap (Tuesdays)
 
 Sent once per week on Tuesdays after `WEEKLY_REPORT_SEND_HOUR_ET`, weeks 1–14, tracked in
@@ -51,12 +63,6 @@ Sent once per week on Tuesdays after `WEEKLY_REPORT_SEND_HOUR_ET`, weeks 1–14,
 
 Formatting constants/helpers live at the top of `weekly-report.js`
 (`STANDINGS_DIVIDER`, `formatRankPrefix`, `formatPointsForDisplay`).
-
-## Planned / not yet built
-
-- **Thursday power rankings** — a separate post ranking teams going into the week, blending
-  results with roster dynasty value (`getPlayerValue` over each roster's `players`). Blend weights
-  and week-over-week movement not finalized.
 
 ## Other notes
 

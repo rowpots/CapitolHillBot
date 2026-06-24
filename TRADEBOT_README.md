@@ -71,6 +71,8 @@ These are the important ones:
 - `WEEKLY_REPORTS_ENABLED`: `true` or `false`, default `true`
 - `WEEKLY_REPORT_SEND_HOUR_ET`: Tuesday send hour in Eastern time, default `10`
 - `WEEKLY_REPORT_SIMULATION_COUNT`: Monte Carlo runs for playoff odds, default `10000`
+- `POWER_RANKINGS_ENABLED`: `true` or `false`, default `true`
+- `POWER_RANKING_SEND_HOUR_ET`: Thursday send hour in Eastern time, default `19` (7 PM)
 - `HEADLESS`: `false` is easier for debugging
 - `DRY_RUN`: `true` logs instead of sending to Snapchat
 - `RUN_ONCE`: `true` checks once and exits
@@ -206,6 +208,51 @@ Team A def. Team B by 1.2
 
 The recap is best-effort: if it fails to send, the standings post is still recorded so it does not
 resend on the next cycle. Both messages render in the `npm run preview-weekly-report` preview.
+
+## Thursday Power Rankings
+
+Separately from the Tuesday standings, the bot posts **power rankings on Thursdays** at
+`POWER_RANKING_SEND_HOUR_ET` (default 7 PM Eastern, about an hour before Thursday Night Football),
+for regular-season **Weeks 2-14**. Each post is titled for the upcoming week (e.g. the Thursday
+that kicks off Week 2 posts "Week 2 Power Rankings", ranked from Week 1 results). Week 1 has no
+games played yet, so the first post is Week 2. It sends each week once and tracks sent weeks in
+`.state/power-rankings-state.json`.
+
+Power rankings differ from standings by rewarding scoring and removing schedule luck. Each team
+gets a 0-100 power score from a weighted blend:
+
+- 40% scoring (points per game)
+- 25% all-play win % (your record if you played everyone every week)
+- 20% actual win %
+- 15% recent form (last 3 weeks)
+
+Teams are sorted by power score with movement arrows versus the previous week's ranking.
+
+```text
+📈 Capitol Hill Week 14 Power Rankings
+———————————————————————————
+Score /100  ·  ↑↓ vs last week
+
+🥇 JoshPT   99.0  —
+
+🥈 The Bad Man   94.0  ↑1
+
+🥉 Alexandria Ocasio-Cortez   88.0  ↑3
+
+4. DrtyBubble   86.8  ↓1
+...
+```
+
+The score is a 0-100 rating scaled so the best team is ~99 and the worst ~40.
+
+Preview it without posting (movement is derived by diffing the week against the one before):
+
+```bash
+npm run preview-power-rankings -- --previous --week 14
+```
+
+Add `--send` (and optionally `--chat-id`) to deliver it to the test chat. Weights live as tunable
+constants at the top of [weekly-report.js](c:/Users/rowan/OneDrive/Desktop/tradebot/SnapBot/weekly-report.js).
 
 ## Trade Message Format
 
