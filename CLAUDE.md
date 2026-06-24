@@ -34,6 +34,10 @@ user-facing guide and env reference.
   self-heals via `ensureSnapchatSessionReady` / `restartSnapchatSession`.
 - Multi-line messages are typed with Shift+Enter per newline, so leading blank lines in a message
   string render as real spacing.
+- Both queued-trade release (`flushQueuedTradeNotifications`) and milestone release
+  (`flushMilestones`) send **at most one message per poll cycle** even if several are due at once
+  (e.g. multiple trades hitting the same `TRADE_PRIME_TIME_SEND_HOUR_ET` slot) — sending several
+  back-to-back risks Snapchat dropping a send mid-burst, on top of looking like spam.
 
 ## Power rankings (Thursdays)
 

@@ -832,32 +832,38 @@ async function flushQueuedTradeNotifications(state) {
     return;
   }
 
-  console.log(
-    `Releasing ${dueNotifications.length} queued trade notification(s) scheduled for ${formatTradePrimeTimeLabel(
-      config.tradePrimeTimeSendHourEt
-    )}.`
-  );
+  if (dueNotifications.length > 1) {
+    console.log(
+      `${dueNotifications.length} queued trade notification(s) are due for ${formatTradePrimeTimeLabel(
+        config.tradePrimeTimeSendHourEt
+      )}; sending one this cycle, the rest will follow on later cycles.`
+    );
+  }
 
-  for (const notification of dueNotifications) {
-    try {
-      const delivered = await deliverTradeNotification(notification.analysis);
-      if (!delivered) {
-        console.warn(
-          `Queued trade ${notification.transactionId} will stay pending because delivery failed.`
-        );
-        continue;
-      }
-
-      state.sentTransactionIds.add(notification.transactionId);
-      removeQueuedTradeNotification(state, notification.transactionId);
-      await saveState(state);
-      console.log(`Queued trade ${notification.transactionId} recorded as sent.`);
-    } catch (error) {
-      console.error(
-        `Unable to deliver queued trade ${notification.transactionId}.`
+  // Send at most one queued trade per poll cycle. Multiple trades accepted the
+  // same day all release at the same prime-time slot, so without this they'd
+  // fire back-to-back in a tight loop — which both looks like spam and risks
+  // Snapchat's UI dropping a send when the textbox hasn't settled from the last
+  // one (the same issue we hit testing milestone alerts).
+  const [notification] = dueNotifications;
+  try {
+    const delivered = await deliverTradeNotification(notification.analysis);
+    if (!delivered) {
+      console.warn(
+        `Queued trade ${notification.transactionId} will stay pending because delivery failed.`
       );
-      console.error(error);
+      return;
     }
+
+    state.sentTransactionIds.add(notification.transactionId);
+    removeQueuedTradeNotification(state, notification.transactionId);
+    await saveState(state);
+    console.log(`Queued trade ${notification.transactionId} recorded as sent.`);
+  } catch (error) {
+    console.error(
+      `Unable to deliver queued trade ${notification.transactionId}.`
+    );
+    console.error(error);
   }
 }
 
