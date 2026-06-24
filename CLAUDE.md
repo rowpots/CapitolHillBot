@@ -4,22 +4,6 @@ Node (ESM) bot that watches a Sleeper dynasty league and posts into a Snapchat g
 Puppeteer (Snapchat Web automation). See [TRADEBOT_README.md](TRADEBOT_README.md) for the full
 user-facing guide and env reference.
 
-## ⏭️ WHERE WE LEFT OFF (next session)
-
-The **milestone alerts** (playoff clinch/elimination + all-time record book) are built and pass the
-replay preview, but they are **NOT committed** and have **NOT been sent to a real Snapchat chat yet**.
-
-**Next thing to do: test the new stuff in the test group chat before committing.**
-
-1. `npm run preview-milestones -- --previous --send` — drop a sample milestone message in the test
-   chat and check the formatting looks good on the phone.
-2. Re-check the power-rankings + recap formatting in the test chat if desired
-   (`npm run preview-power-rankings -- --previous --week 14 --send`).
-3. Once the formats look good, commit (Tuesday recap + standings reformat are already committed;
-   the **power-rankings** commit `a75454d` is in, but the **milestone alerts** changes are still
-   uncommitted — `milestones.js`, `preview-milestones.js`, and edits to `index.js` /
-   `weekly-report.js` / `package.json` / docs).
-
 ## Running / testing
 
 - Always run from this `SnapBot/` directory — `.env` lives here and `dotenv` loads from cwd.
@@ -69,20 +53,27 @@ Event-driven, in `milestones.js`. Detected once when a week's results are final 
 `refreshMilestones` inside `pollForWeeklyReport`, reusing the already-fetched matchups +
 `report.standings`), then each event is queued with a daytime ET release slot (`computeReleaseSlots`)
 so they **drip out one at a time** between Tue and the next games instead of dogpiling the recap.
-`flushMilestones` (in the main loop) sends due events best-effort.
+`flushMilestones` (in the main loop) sends **at most one due event per poll cycle** — any backlog
+(e.g. after downtime) trickles out one per cycle instead of bursting, which also avoids Snapchat
+dropping a message typed during a rapid-fire send.
 
 - **Playoff clinch/bye/elimination** from `report.standings` playoff odds (100%/0% Monte Carlo
-  proxy), gated to Week ≥ 8 (`PLAYOFF_ALERT_MIN_WEEK`). `PLAYOFF_ALERTS_ENABLED`.
+  proxy), gated to Week ≥ 8 (`PLAYOFF_ALERT_MIN_WEEK`). Multiple teams crossing the same threshold
+  in the same week are grouped into one message (e.g. "Team A, Team B, and Team C have clinched a
+  playoff spot!"). `PLAYOFF_ALERTS_ENABLED`.
 - **Record book** (highest/lowest week score, biggest blowout, longest win streak ≥ 4): one
-  candidate per record per week; seeded all-time from the `previous_league_id` chain
+  candidate per record per week — never needs grouping, since only one team can hold a given
+  record in a given week; seeded all-time from the `previous_league_id` chain
   (`buildRecordBookFromHistory`, regular-season weeks). `RECORD_BOOK_ENABLED`.
 - **First run is silent**: `baselineMilestoneState` records current clinches + seeds the book and
   sets `detectedThroughWeek`, so nothing already-passed is announced. Reset per season.
 - State: `.state/milestone-state.json` (season, detectedThroughWeek, clinched/byeClinched/eliminated,
-  queue) + `.state/record-book.json`. These are loaded/saved per-call (file-backed), not threaded
-  through the loop. Depends on `WEEKLY_REPORTS_ENABLED` (that's where playoff odds are computed).
-- Preview/test: `npm run preview-milestones -- --previous` replays a season week-by-week (forces an
-  empty book so the mechanism is visible); `--send` pushes one sample to the test chat.
+  queue) + `.state/record-book.json`. File-backed, loaded/saved per-call. Depends on
+  `WEEKLY_REPORTS_ENABLED` (that's where playoff odds are computed).
+- Preview/test: `npm run preview-milestones -- --previous` replays a season week-by-week. `--send`
+  pushes one sample to the test chat; `--send-all` sends every matching event, `--send-distinct`
+  sends one per event subtype, `--type=<clinch|byeClinch|eliminated|record>` and `--week=<N>` filter
+  which events are sent.
 
 ## Weekly report + recap (Tuesdays)
 
