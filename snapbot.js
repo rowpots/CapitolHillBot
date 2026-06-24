@@ -5,6 +5,7 @@ puppeteer.use(Stealth());
 
 import fs from "fs";
 import fsPromise from "fs/promises";
+import path from "path";
 
 function delay(time) {
   return new Promise(function (resolve) {
@@ -12,7 +13,7 @@ function delay(time) {
   });
 }
 
-const lastTestedVersion = "v13.38.0";
+const lastTestedVersion = "v13.79.0";
 
 export default class SnapBot {
   constructor() {
@@ -332,140 +333,104 @@ export default class SnapBot {
   }
 
   async captureSnap(obj) {
-    try {
-      //updated version here v2.0
-      let captureBtnFound = false;
-      const captureButtonSelector = "button.FBYjn.gK0xL.A7Cr_.m3ODJ";
+    await this.ensureSnapCaptured();
+    await delay(1000);
 
-      const captureButton = await this.page.$(captureButtonSelector);
-      if (captureButton) {
-        const isVisible = (await captureButton.boundingBox()) !== null;
-        if (isVisible) {
-          await captureButton.click();
-          captureBtnFound = true;
-        }
-      }
-      if (!captureBtnFound) {
-        const svgButtonSelector = "button.qJKfS";
-        await delay(1000);
+    // 📝 Add caption if provided
+    if (obj.caption) {
+      await delay(2000);
+      const captionButtonSelector = 'button[title="Add a caption"]';
+      await this.page.waitForSelector(captionButtonSelector, {
+        visible: true,
+      });
+      await this.page.click(captionButtonSelector);
 
-        let isSVGbuttonFound = null;
-        let retries = 0;
-        const maxRetries = 3;
+      await delay(1000);
+      const textareaSelector = 'textarea.B9QiX[aria-label="Caption Input"]';
+      await this.page.waitForSelector(textareaSelector, { visible: true });
+      await this.page.type(textareaSelector, obj.caption, { delay: 100 });
 
-        while (!isSVGbuttonFound && retries < maxRetries) {
-          try {
-            isSVGbuttonFound = await this.page.waitForSelector(
-              svgButtonSelector,
-              {
-                visible: true,
-                timeout: 15000,
-              }
-            );
-          } catch (error) {
-            console.log("Couldn't find the SVG selector, retrying...");
-          }
-
-          if (!isSVGbuttonFound) {
-            retries++;
-            console.log(`Retries left: ${maxRetries - retries}`);
-            await delay(1000);
-          }
-        }
-
-        if (isSVGbuttonFound) {
-          await this.page.click(svgButtonSelector);
-          console.log("clicked svg button");
-        } else {
-          console.log("SVG button not found after maximum retries.");
-        }
-        // Capture button
-        if (isSVGbuttonFound) {
-          await delay(1000);
-          const captureButtonSelector = "button.FBYjn.gK0xL.A7Cr_.m3ODJ"; 
-          const captureButton = await this.page.waitForSelector(
-            captureButtonSelector,
-            { visible: true }
-          );
-          await captureButton.click();
-          console.log("✅ Clicked the capture button");
-        }
-      }
-
-      await delay(3000);
-
-      // 📸 Add custom image if `obj.path` exists
-      if (obj.path) {
-        try {
-          const imageToBase64 = await fsPromise.readFile(obj.path, "base64");
-          const imageData = `data:image/png;base64,${imageToBase64}`;
-
-          // Wait for container
-          const containerSelector = "#snap-preview-container";
-          await this.page.waitForSelector(containerSelector, { visible: true });
-
-          await this.page.evaluate(
-            (containerSelector, imageData) => {
-              const container = document.querySelector(containerSelector);
-              if (container) {
-                const img = container.querySelector("img");
-                if (img) img.src = imageData;
-              }
-            },
-            containerSelector,
-            imageData
-          );
-          // await this.page.evaluate((imageData) => {
-          //   const img = document.querySelector("#snap-preview-container img");
-          //   if (img) img.src = imageData; // if imageData is already available in the page
-          // }, imageData);
-
-          console.log("✅ Image added successfully");
-        } catch (error) {
-          console.warn("⚠️ Error adding image:", error);
-        }
-      }
+      console.log("✅ Caption added successfully");
 
       await delay(1000);
 
-      // 📝 Add caption if provided
-      if (obj.caption) {
-        await delay(2000);
-        const captionButtonSelector = 'button[title="Add a caption"]';
-        await this.page.waitForSelector(captionButtonSelector, {
-          visible: true,
-        });
-        await this.page.click(captionButtonSelector);
+      //caption pos
+      if (obj.position) {
+        const elementHandle = await this.page.$(textareaSelector);
+        if (elementHandle) {
+          const box = await elementHandle.boundingBox();
+          if (box) {
+            const startX = box.x + box.width / 2;
+            const startY = box.y + box.height / 2;
+            const endY = startY + obj.position;
 
-        await delay(1000);
-        const textareaSelector = 'textarea.B9QiX[aria-label="Caption Input"]';
-        await this.page.waitForSelector(textareaSelector, { visible: true });
-        await this.page.type(textareaSelector, obj.caption, { delay: 100 });
-
-        console.log("✅ Caption added successfully");
-
-        await delay(1000);
-
-        //caption pos
-        if (obj.position) {
-          const elementHandle = await this.page.$(textareaSelector);
-          if (elementHandle) {
-            const box = await elementHandle.boundingBox();
-            if (box) {
-              const startX = box.x + box.width / 2;
-              const startY = box.y + box.height / 2;
-              const endY = startY + obj.position;
-
-              await this.page.mouse.move(startX, startY); // Move to starting position
-              await this.page.mouse.down(); // Click and hold (start drag)
-              await this.page.mouse.move(startX, endY, { steps: 10 }); // Drag smoothly
-              await this.page.mouse.up(); // Release (drop)
-            }
+            await this.page.mouse.move(startX, startY); // Move to starting position
+            await this.page.mouse.down(); // Click and hold (start drag)
+            await this.page.mouse.move(startX, endY, { steps: 10 }); // Drag smoothly
+            await this.page.mouse.up(); // Release (drop)
           }
         }
       }
+    }
+  }
+
+  // Opens the camera and takes a snap. Retries because the fake/real camera
+  // feed occasionally isn't ready yet when the shutter is first clicked, which
+  // otherwise leaves captureSnap() waiting 30s for a preview that will never
+  // appear. A retry must check whether the camera is still open (the shutter
+  // click can fail without leaving the live camera view) rather than always
+  // trying to reopen it — button.qJKfS only exists from the chat list, so
+  // waiting for it while already inside the camera view just times out.
+  async ensureSnapCaptured(maxAttempts = 2) {
+    const shutterSelector = "button.FBYjn.gK0xL.A7Cr_.m3ODJ";
+    const openCameraSelector = "button.qJKfS";
+
+    for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+      const shutterButton = await this.page.$(shutterSelector);
+      const cameraAlreadyOpen = Boolean(
+        shutterButton && (await shutterButton.boundingBox())
+      );
+
+      if (!cameraAlreadyOpen) {
+        await this.page.waitForSelector(openCameraSelector, {
+          visible: true,
+          timeout: 15000,
+        });
+        await this.page.click(openCameraSelector);
+        console.log("clicked svg button");
+
+        await this.page.waitForSelector(shutterSelector, {
+          visible: true,
+          timeout: 15000,
+        });
+      }
+
+      await this.page.click(shutterSelector);
+      console.log("✅ Clicked the capture button");
+
+      if (await this.waitForSnapPreview(10000)) {
+        return;
+      }
+
+      console.log(
+        `Snap preview did not appear after attempt ${attempt}/${maxAttempts}, retrying.`
+      );
+    }
+
+    throw new Error(
+      "Timed out waiting for the snap preview after taking a photo."
+    );
+  }
+
+  async waitForSnapPreview(timeout) {
+    try {
+      await this.page.waitForSelector("#snap-preview-container", {
+        visible: true,
+        timeout,
+      });
+      return true;
     } catch (error) {
-      console.error("❌ Error in capturing the snap:", error);
+      return false;
     }
   }
 
@@ -716,14 +681,93 @@ export default class SnapBot {
     }
   }
 
-  async sendTradeCard({ chatId, imagePath, caption = "", captionPosition = 500 }) {
+  // Sends the trade card as a real chat image attachment (drag-and-drop onto
+  // the conversation, then Enter) rather than through the Snap camera. The
+  // camera path tops out at whatever resolution Snapchat negotiates for its
+  // getUserMedia capture (~406x720, cropped/JPEG-recompressed) regardless of
+  // viewport size, device pixel ratio, or the source feed's resolution — a
+  // hard ceiling baked into Snapchat's own camera code, not something we can
+  // negotiate around. A plain chat attachment has no such cap: it's delivered
+  // at the PNG's native resolution untouched.
+  async sendTradeCard({ chatId, imagePath }) {
     await this.openMessagingHome();
-    await this.captureSnap({
-      path: imagePath,
-      caption,
-      position: captionPosition,
-    });
-    await this.sendSnapToChat(chatId);
+    await this.sendImageAttachment({ chatId, imagePath });
+  }
+
+  async sendImageAttachment({ chatId, imagePath }) {
+    const titleSpan = await this.findRecipientTitleSpan(chatId);
+    if (!titleSpan) {
+      throw new Error(`Could not find chat ${chatId} in the Snapchat chat list.`);
+    }
+    await titleSpan.click();
+
+    const textboxSelector = 'div[role="textbox"].euyIb';
+    await this.page.waitForSelector(textboxSelector, { visible: true });
+    await delay(500);
+
+    const imageBuffer = await fsPromise.readFile(imagePath);
+    const base64Data = imageBuffer.toString("base64");
+    const fileName = path.basename(imagePath);
+
+    await this.page.evaluate(
+      async ({ base64Data, fileName, textboxSelector }) => {
+        const byteString = atob(base64Data);
+        const bytes = new Uint8Array(byteString.length);
+        for (let i = 0; i < byteString.length; i += 1) {
+          bytes[i] = byteString.charCodeAt(i);
+        }
+        const file = new File([bytes], fileName, { type: "image/png" });
+
+        const dataTransfer = new DataTransfer();
+        dataTransfer.items.add(file);
+
+        const textbox = document.querySelector(textboxSelector);
+        const target = textbox
+          ? textbox.closest("section") || textbox.parentElement?.parentElement || textbox
+          : document.body;
+
+        const fireEvent = (type) => {
+          target.dispatchEvent(
+            new DragEvent(type, { bubbles: true, cancelable: true, dataTransfer })
+          );
+        };
+
+        fireEvent("dragenter");
+        await new Promise((resolve) => setTimeout(resolve, 300));
+        fireEvent("dragover");
+        await new Promise((resolve) => setTimeout(resolve, 300));
+        fireEvent("drop");
+      },
+      { base64Data, fileName, textboxSelector }
+    );
+
+    // Snapchat reveals a real <input type="file"> only once it has accepted
+    // the drop — a reliable signal the attachment actually staged, instead of
+    // blindly proceeding to send nothing.
+    const staged = await this.page
+      .waitForSelector("input[type='file']", { timeout: 5000 })
+      .then(() => true)
+      .catch(() => false);
+
+    if (!staged) {
+      throw new Error(
+        "Dropping the trade card image onto the chat did not stage an attachment."
+      );
+    }
+
+    await delay(1000);
+    await this.page.click(textboxSelector);
+    await this.page.keyboard.press("Enter");
+    await delay(2000);
+  }
+
+  async resolveChatDisplayName(chatId) {
+    const titleSpan = await this.findRecipientTitleSpan(chatId);
+    if (!titleSpan) {
+      throw new Error(`Could not find chat ${chatId} in the Snapchat chat list.`);
+    }
+
+    return this.page.evaluate((element) => element.textContent.trim(), titleSpan);
   }
 
   async typeChatMessage(message) {
@@ -1052,32 +1096,62 @@ export default class SnapBot {
     await this.waitForChatList();
   }
 
-  async sendSnapToChat(chatId) {
+  async sendSnapToChat(chatId, recipientName) {
     const openedSendChooser = await this.clickSnapComposerSendButton();
     if (!openedSendChooser) {
       throw new Error("Could not open the Snapchat send chooser.");
     }
 
     await delay(1500);
-    await this.handlePopup(1500);
 
-    const titleSpan = await this.findTitleSpanOnCurrentView(chatId, 45);
-    if (!titleSpan) {
-      throw new Error(`Could not find snap recipient chat ${chatId}.`);
+    // Deliberately skip handlePopup() here: the snap preview's own
+    // "Close snap preview and return to camera." button matches the generic
+    // close-button heuristic, which closes this picker instead of an
+    // unrelated popup.
+
+    const resolvedName = recipientName || (await this.resolveChatDisplayName(chatId));
+    const rowClicked = await this.clickSendPickerRowByName(resolvedName);
+    if (!rowClicked) {
+      throw new Error(
+        `Could not find snap recipient "${resolvedName}" in the send picker.`
+      );
     }
 
-    await titleSpan.click();
     await delay(750);
 
-    const clickedFinalSendButton =
-      (await this.clickVisibleElement(["button[type='submit']"])) ||
-      (await this.clickVisibleButtonByText(["Send", "Send Snap", "Send to"]));
-
+    const clickedFinalSendButton = await this.clickVisibleButtonByExactText("Send");
     if (!clickedFinalSendButton) {
       throw new Error("Could not find the final Snapchat send button.");
     }
 
     await delay(2500);
+  }
+
+  // The send picker's rows are plain divs with no role="button" or id tying
+  // them to a chat id, so the only reliable way to pick the right recipient
+  // is by matching the chat's display name (resolved beforehand from the
+  // regular chat-list sidebar via findRecipientTitleSpan/resolveChatDisplayName).
+  async clickSendPickerRowByName(name) {
+    return this.page.evaluate((targetName) => {
+      const list = document.querySelector("ul.s7loS");
+      if (!list) {
+        return false;
+      }
+
+      const rows = Array.from(
+        list.querySelectorAll("li > div.RbA83, li > div.Ewflr")
+      );
+      const match = rows.find((row) =>
+        (row.textContent || "").trim().includes(targetName)
+      );
+
+      if (!match) {
+        return false;
+      }
+
+      match.click();
+      return true;
+    }, name);
   }
 
   async clickSnapComposerSendButton() {
@@ -1147,6 +1221,40 @@ export default class SnapBot {
 
         return false;
       }, textTargets);
+    } catch (error) {
+      if (this.isDetachedFrameError(error)) {
+        return false;
+      }
+
+      throw error;
+    }
+  }
+
+  // Exact-match variant: clickVisibleButtonByText's substring match is
+  // ambiguous between e.g. "Send" and "Send To", which can both be present
+  // on screen at the same time in the snap send flow.
+  async clickVisibleButtonByExactText(text) {
+    try {
+      return await this.page.evaluate((target) => {
+        const isVisible = (element) => {
+          const rect = element.getBoundingClientRect();
+          return rect.width > 0 && rect.height > 0;
+        };
+
+        const buttons = Array.from(
+          document.querySelectorAll("button, [role='button']")
+        );
+        const match = buttons.find(
+          (button) => isVisible(button) && button.textContent?.trim() === target
+        );
+
+        if (match) {
+          match.click();
+          return true;
+        }
+
+        return false;
+      }, text);
     } catch (error) {
       if (this.isDetachedFrameError(error)) {
         return false;

@@ -2,6 +2,8 @@ import fs from "fs";
 import path from "path";
 import { fileURLToPath } from "url";
 
+import { parseJsonFile } from "./logging.js";
+
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const ROASTS_FILE = path.join(__dirname, "roasts.json");
@@ -49,7 +51,7 @@ export function getRoastForSeverity({
 export function loadRoastTemplates(logger = console) {
   try {
     const fileContents = fs.readFileSync(ROASTS_FILE, "utf8");
-    const parsed = JSON.parse(fileContents);
+    const parsed = parseJsonFile(fileContents);
     clearWarning();
     return normalizeRoastTemplates(parsed);
   } catch (error) {

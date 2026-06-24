@@ -15,6 +15,11 @@ export function installTimestampedConsole() {
   console[CONSOLE_PATCH_FLAG] = true;
 }
 
+export function parseJsonFile(text) {
+  const withoutBom = text.charCodeAt(0) === 0xfeff ? text.slice(1) : text;
+  return JSON.parse(withoutBom);
+}
+
 export function describeError(error) {
   if (!error) {
     return "Unknown error";

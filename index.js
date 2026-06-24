@@ -4,7 +4,7 @@ import { fileURLToPath } from "url";
 
 import dotenv from "dotenv";
 
-import { describeError, installTimestampedConsole } from "./logging.js";
+import { describeError, installTimestampedConsole, parseJsonFile } from "./logging.js";
 import { loadDynastyValueBook } from "./dynasty-values.js";
 import { getRoastForSeverity } from "./roast-templates.js";
 import SnapBot from "./snapbot.js";
@@ -167,7 +167,10 @@ async function main() {
 
 async function startSnapchatSession() {
   console.log("Launching Snapchat Web.");
+  await establishSnapchatSession();
+}
 
+async function establishSnapchatSession() {
   await bot.launchSnapchat(
     {
       headless: config.headless,
@@ -176,6 +179,7 @@ async function startSnapchatSession() {
         "--force-device-scale-factor=1",
         "--allow-file-access-from-files",
         "--use-fake-ui-for-media-stream",
+        "--use-fake-device-for-media-stream",
         "--enable-media-stream",
       ],
     },
@@ -238,7 +242,7 @@ async function restartSnapchatSession() {
     bot.page = null;
   }
 
-  await startSnapchatSession();
+  await establishSnapchatSession();
 }
 
 async function ensureSnapchatSessionReady() {
@@ -544,7 +548,7 @@ async function processQueuedManualTestTrade() {
 
   try {
     const fileContents = await fs.readFile(MANUAL_TEST_TRIGGER_FILE, "utf8");
-    payload = JSON.parse(fileContents);
+    payload = parseJsonFile(fileContents);
   } catch (error) {
     if (error?.code === "ENOENT") {
       return;
@@ -603,10 +607,17 @@ async function processQueuedManualTestTrade() {
         });
       }
 
+      // A roast failure here must not re-queue the whole trigger: the trade
+      // message/card above already sent, and retrying would resend it.
       if (shouldSendRoast) {
-        await sendChatMessage(roastMessage, "manual test roast message", {
-          chatId: targetChatId,
-        });
+        try {
+          await sendChatMessage(roastMessage, "manual test roast message", {
+            chatId: targetChatId,
+          });
+        } catch (error) {
+          console.warn("Manual test roast message failed.");
+          console.warn(error.message);
+        }
       }
     }
 
@@ -635,10 +646,7 @@ async function sendTradeCardMessage(analysis, label, { chatId } = {}) {
   const targetChatId = chatId || resolveNotificationChatId("live");
   const imagePath = await renderTradeCardForDelivery(analysis, label);
   await ensureSnapchatSessionReady();
-  await bot.sendTradeCard({
-    chatId: targetChatId,
-    imagePath,
-  });
+  await bot.sendTradeCard({ chatId: targetChatId, imagePath });
   console.log(`Sent ${label} to ${describeNotificationChat(targetChatId)}.`);
 }
 
@@ -1252,7 +1260,7 @@ async function loadPlayersById() {
 async function readCachedPlayers(acceptStale) {
   try {
     const fileContents = await fs.readFile(PLAYERS_CACHE_FILE, "utf8");
-    const parsed = JSON.parse(fileContents);
+    const parsed = parseJsonFile(fileContents);
     const cachedAt = parsed?.cachedAt ? Date.parse(parsed.cachedAt) : 0;
 
     if (!acceptStale) {
@@ -1272,7 +1280,7 @@ async function loadState() {
 
   try {
     const fileContents = await fs.readFile(STATE_FILE, "utf8");
-    const parsed = JSON.parse(fileContents);
+    const parsed = parseJsonFile(fileContents);
 
     return {
       initialized: Boolean(parsed.initialized),
@@ -1312,7 +1320,7 @@ async function loadWeeklyReportState() {
 
   try {
     const fileContents = await fs.readFile(WEEKLY_REPORT_STATE_FILE, "utf8");
-    const parsed = JSON.parse(fileContents);
+    const parsed = parseJsonFile(fileContents);
 
     return {
       sentBySeason: parsed?.sentBySeason ?? {},
