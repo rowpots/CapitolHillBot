@@ -173,13 +173,39 @@ The bot also checks for a weekly standings message every polling cycle.
 The message looks like this:
 
 ```text
-Week 7 Standings
-Capitol Hill
+🏈 Capitol Hill Week 7 Standings
+—————————————————————————
+🥇 Team Rowan   6-1
+   PF 812  ·  PO 94%  ·  Bye 38%
 
-1. Team Rowan 6-1 | PF 812.3 | PO 94% | Bye 38%
-2. Capitol Crushers 5-2 | PF 790.1 | PO 86% | Bye 27%
+🥈 Capitol Crushers   5-2
+   PF 790  ·  PO 86%  ·  Bye 27%
 ...
 ```
+
+Top three teams get medal emojis; the rest are numbered. Bye odds only appear when non-zero.
+
+Immediately after the standings post, the bot sends a second recap message with the week's
+superlatives: top scorer, lowest scorer, biggest blowout, and closest game.
+
+```text
+📊 Week 7 Matchups Recap
+
+🔥 Top Score
+Team Rowan — 142.6
+
+🧊 Low Score
+Capitol Crushers — 78.2
+
+💥 Biggest Blowout
+Team Rowan def. Capitol Crushers by 64.4
+
+😬 Closest Game
+Team A def. Team B by 1.2
+```
+
+The recap is best-effort: if it fails to send, the standings post is still recorded so it does not
+resend on the next cycle. Both messages render in the `npm run preview-weekly-report` preview.
 
 ## Trade Message Format
 

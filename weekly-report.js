@@ -3,6 +3,7 @@ const DEFAULT_REGULAR_SEASON_END_WEEK = 14;
 const DEFAULT_PLAYOFF_TEAM_COUNT = 6;
 const DEFAULT_TEAM_NAME_MAX_LENGTH = 24;
 const EASTERN_TIME_ZONE = "America/New_York";
+const STANDINGS_DIVIDER = "———————————————————————————";
 
 export function buildWeeklyReport({
   league,
@@ -96,22 +97,173 @@ export function formatWeeklyReportMessage({
   standings,
   includeByeOdds,
 }) {
-  const lines = [`Week ${week} Standings`, leagueName, ""];
+  const blocks = [];
 
   for (const team of standings) {
     const oddsBits = [`PO ${formatPercent(team.playoffOdds)}`];
-    if (includeByeOdds) {
+    // Only surface bye odds when they are non-zero — every eliminated team
+    // showing "Bye 0%" is just clutter.
+    if (includeByeOdds && (team.byeOdds ?? 0) > 0) {
       oddsBits.push(`Bye ${formatPercent(team.byeOdds)}`);
     }
 
-    lines.push(
-      `${team.rank}. ${truncateLabel(team.label, DEFAULT_TEAM_NAME_MAX_LENGTH)} ${formatRecord(team)} | PF ${formatOneDecimal(team.pointsFor)} | ${oddsBits.join(
-        " | "
-      )}`
+    const headline = `${formatRankPrefix(team.rank)} ${truncateLabel(
+      team.label,
+      DEFAULT_TEAM_NAME_MAX_LENGTH
+    )}   ${formatRecord(team)}`;
+    const detail = `   PF ${formatPointsForDisplay(team.pointsFor)}  ·  ${oddsBits.join(
+      "  ·  "
+    )}`;
+
+    blocks.push(`${headline}\n${detail}`);
+  }
+
+  const header = [`🏈 ${leagueName} Week ${week} Standings`, STANDINGS_DIVIDER];
+  return `${header.join("\n")}\n${blocks.join("\n\n")}`;
+}
+
+export function buildWeeklyRecap({
+  league,
+  rosters,
+  users,
+  matchupsByWeek,
+  week,
+}) {
+  const numericWeek = Number(week);
+  if (!Number.isFinite(numericWeek) || numericWeek < 1) {
+    return null;
+  }
+
+  const rosterLookup = buildRosterLookup(rosters);
+  const userLookup = buildUserLookup(users);
+  const labelFor = (rosterId) =>
+    formatRosterLabel(rosterId, rosterLookup, userLookup);
+
+  const entries = normalizeWeekEntries(matchupsByWeek?.[numericWeek] ?? []);
+  if (entries.length === 0) {
+    return null;
+  }
+
+  let topScorer = null;
+  let lowScorer = null;
+  for (const entry of entries) {
+    if (!topScorer || entry.points > topScorer.points) {
+      topScorer = entry;
+    }
+    if (!lowScorer || entry.points < lowScorer.points) {
+      lowScorer = entry;
+    }
+  }
+
+  const matchups = [];
+  for (const matchupEntries of groupWeekEntriesByMatchup(entries).values()) {
+    if (matchupEntries.length !== 2) {
+      continue;
+    }
+
+    const [left, right] = matchupEntries;
+    const margin = Math.abs(left.points - right.points);
+    const isTie = margin < 0.0001;
+    const winner = left.points >= right.points ? left : right;
+    const loser = winner === left ? right : left;
+
+    matchups.push({ margin, isTie, winner, loser });
+  }
+
+  let biggestBlowout = null;
+  let closestGame = null;
+  for (const matchup of matchups) {
+    if (!biggestBlowout || matchup.margin > biggestBlowout.margin) {
+      biggestBlowout = matchup;
+    }
+    if (!closestGame || matchup.margin < closestGame.margin) {
+      closestGame = matchup;
+    }
+  }
+
+  const leagueName = league?.name?.trim() || "Fantasy League";
+  const recap = {
+    week: numericWeek,
+    leagueName,
+    topScorer: topScorer
+      ? { label: labelFor(topScorer.rosterId), points: topScorer.points }
+      : null,
+    lowScorer: lowScorer
+      ? { label: labelFor(lowScorer.rosterId), points: lowScorer.points }
+      : null,
+    biggestBlowout: biggestBlowout
+      ? {
+          winner: labelFor(biggestBlowout.winner.rosterId),
+          loser: labelFor(biggestBlowout.loser.rosterId),
+          margin: biggestBlowout.margin,
+          isTie: biggestBlowout.isTie,
+        }
+      : null,
+    closestGame: closestGame
+      ? {
+          winner: labelFor(closestGame.winner.rosterId),
+          loser: labelFor(closestGame.loser.rosterId),
+          margin: closestGame.margin,
+          isTie: closestGame.isTie,
+        }
+      : null,
+  };
+
+  recap.textMessage = formatWeeklyRecapMessage(recap);
+  return recap;
+}
+
+export function formatWeeklyRecapMessage({
+  week,
+  topScorer,
+  lowScorer,
+  biggestBlowout,
+  closestGame,
+}) {
+  const blocks = [];
+
+  if (topScorer) {
+    blocks.push(
+      `🔥 Top Score\n${truncateLabel(
+        topScorer.label,
+        DEFAULT_TEAM_NAME_MAX_LENGTH
+      )} — ${formatOneDecimal(topScorer.points)}`
     );
   }
 
-  return lines.join("\n");
+  if (lowScorer) {
+    blocks.push(
+      `🧊 Low Score\n${truncateLabel(
+        lowScorer.label,
+        DEFAULT_TEAM_NAME_MAX_LENGTH
+      )} — ${formatOneDecimal(lowScorer.points)}`
+    );
+  }
+
+  if (biggestBlowout) {
+    blocks.push(`💥 Biggest Blowout\n${formatMatchupLine(biggestBlowout)}`);
+  }
+
+  if (closestGame) {
+    blocks.push(`😬 Closest Game\n${formatMatchupLine(closestGame)}`);
+  }
+
+  // Lead with blank lines so the recap (sent as its own message right after the
+  // standings) has a visual buffer instead of butting up against it.
+  return ["", "", `📊 Week ${week} Matchups Recap`, "", blocks.join("\n\n")].join(
+    "\n"
+  );
+}
+
+function formatMatchupLine({ winner, loser, margin, isTie }) {
+  const winnerLabel = truncateLabel(winner, DEFAULT_TEAM_NAME_MAX_LENGTH);
+  const loserLabel = truncateLabel(loser, DEFAULT_TEAM_NAME_MAX_LENGTH);
+
+  if (isTie) {
+    return `${winnerLabel} tied ${loserLabel}`;
+  }
+
+  return `${winnerLabel} def. ${loserLabel} by ${formatOneDecimal(margin)}`;
 }
 
 export function isTuesdayAfterHourInEastern(date, hour24) {
@@ -504,6 +656,24 @@ function formatRecord(team) {
   return team.ties > 0
     ? `${team.wins}-${team.losses}-${team.ties}`
     : `${team.wins}-${team.losses}`;
+}
+
+function formatRankPrefix(rank) {
+  if (rank === 1) {
+    return "🥇";
+  }
+  if (rank === 2) {
+    return "🥈";
+  }
+  if (rank === 3) {
+    return "🥉";
+  }
+
+  return `${rank}.`;
+}
+
+function formatPointsForDisplay(value) {
+  return String(Math.round(Number(value) || 0));
 }
 
 function formatPercent(value) {

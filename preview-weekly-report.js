@@ -2,7 +2,11 @@ import dotenv from "dotenv";
 
 import { describeError, installTimestampedConsole } from "./logging.js";
 import SnapBot from "./snapbot.js";
-import { buildWeeklyReport, findLatestCompletedWeek } from "./weekly-report.js";
+import {
+  buildWeeklyRecap,
+  buildWeeklyReport,
+  findLatestCompletedWeek,
+} from "./weekly-report.js";
 
 dotenv.config();
 installTimestampedConsole();
@@ -70,11 +74,24 @@ async function main() {
     simulationCount: Math.max(1000, Number(args.simulations) || 10000),
   });
 
+  const recap = buildWeeklyRecap({
+    league,
+    rosters,
+    users,
+    matchupsByWeek,
+    week: requestedWeek,
+  });
+
   console.log(
     `Previewing ${report.leagueName} ${report.season} Week ${report.week} standings`
   );
   console.log("");
   console.log(report.textMessage);
+
+  if (recap) {
+    console.log("");
+    console.log(recap.textMessage);
+  }
 
   if (args.send) {
     const targetChatId =
@@ -88,9 +105,14 @@ async function main() {
       );
     }
 
+    const messages = [report.textMessage];
+    if (recap) {
+      messages.push(recap.textMessage);
+    }
+
     await sendPreviewReportToChat({
       chatId: targetChatId,
-      message: report.textMessage,
+      messages,
     });
   }
 }
@@ -152,7 +174,7 @@ async function fetchJson(url) {
   return response.json();
 }
 
-async function sendPreviewReportToChat({ chatId, message }) {
+async function sendPreviewReportToChat({ chatId, messages }) {
   validateSendEnvironment();
 
   const bot = new SnapBot();
@@ -161,19 +183,45 @@ async function sendPreviewReportToChat({ chatId, message }) {
     console.log("");
     console.log(`Sending preview report to test chat ${chatId}`);
     await startSnapchatSession(bot);
-    await bot.openMessagingHome();
-    await bot.sendMessage({
-      chat: chatId,
-      message,
-      exit: false,
-    });
-    console.log("Preview report sent.");
+    // Open messaging home before each send — the same proven pattern the live
+    // bot uses for trade + roast. Opening once and looping drops the first
+    // message because the chat/textbox is not settled yet.
+    for (const message of messages) {
+      await sendMessageWithRetry(bot, chatId, message);
+    }
+    console.log(`Preview report sent (${messages.length} message(s)).`);
   } finally {
     if (bot.browser) {
       await bot.closeBrowser().catch((error) => {
         console.warn("Unable to close the Snapchat browser cleanly.");
         console.warn(error.message);
       });
+    }
+  }
+}
+
+// Reopening messaging home reloads the page, and right after a fast
+// cookie-restored login the target chat's row can take a moment to render into
+// the scrollable list. Reopen + retry once before giving up.
+async function sendMessageWithRetry(bot, chatId, message, attempts = 2) {
+  for (let attempt = 1; attempt <= attempts; attempt += 1) {
+    await bot.openMessagingHome();
+    try {
+      await bot.sendMessage({ chat: chatId, message, exit: false });
+      return;
+    } catch (error) {
+      const canRetry =
+        attempt < attempts &&
+        /Could not find chat/.test(String(error?.message ?? ""));
+      if (!canRetry) {
+        throw error;
+      }
+
+      console.warn(
+        `Chat not ready yet (attempt ${attempt}/${attempts}); waiting before retry.`
+      );
+      console.warn(error.message);
+      await new Promise((resolve) => setTimeout(resolve, 4000));
     }
   }
 }

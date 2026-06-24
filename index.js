@@ -10,6 +10,7 @@ import { getRoastForSeverity } from "./roast-templates.js";
 import SnapBot from "./snapbot.js";
 import { renderTradeCardImage } from "./trade-card.js";
 import {
+  buildWeeklyRecap,
   buildWeeklyReport,
   findLatestCompletedWeek,
   isTuesdayAfterHourInEastern,
@@ -30,7 +31,7 @@ const WEEKLY_REPORT_STATE_FILE = path.join(
 );
 const MANUAL_TEST_TRIGGER_FILE = path.join(STATE_DIR, "manual-test-trade.json");
 const PLAYERS_CACHE_FILE = path.join(STATE_DIR, "players-nfl.json");
-const PLAYERS_CACHE_TTL_MS = 7 * 24 * 60 * 60 * 1000;
+const PLAYERS_CACHE_TTL_MS = 24 * 60 * 60 * 1000;
 const REQUEST_TIMEOUT_MS = 20000;
 const VERDICT_EPSILON = 100;
 const MANUAL_TRIGGER_CHECK_INTERVAL_MS = 5000;
@@ -89,6 +90,7 @@ const config = {
 const bot = new SnapBot();
 
 let isShuttingDown = false;
+let hasWarnedStalePlayerCache = false;
 
 main().catch(async (error) => {
   console.error("Fatal error while running the Sleeper trade bot.");
@@ -426,8 +428,19 @@ async function pollForWeeklyReport(weeklyReportState) {
     simulationCount: config.weeklyReportSimulationCount,
   });
 
+  const recap = buildWeeklyRecap({
+    league,
+    rosters,
+    users,
+    matchupsByWeek,
+    week: latestCompletedWeek,
+  });
+
   if (config.dryRun) {
     console.log(`[Dry Run] ${report.textMessage}`);
+    if (recap) {
+      console.log(`[Dry Run] ${recap.textMessage}`);
+    }
     return;
   }
 
@@ -435,6 +448,20 @@ async function pollForWeeklyReport(weeklyReportState) {
     report.textMessage,
     `weekly report for week ${latestCompletedWeek}`
   );
+
+  // The recap is a best-effort second message. A failure here must not block
+  // markWeeklyReportSent, otherwise the standings post would resend next cycle.
+  if (recap) {
+    try {
+      await sendChatMessage(
+        recap.textMessage,
+        `weekly recap for week ${latestCompletedWeek}`
+      );
+    } catch (error) {
+      console.warn(`Weekly recap send failed for week ${latestCompletedWeek}.`);
+      console.warn(error.message);
+    }
+  }
 
   markWeeklyReportSent(weeklyReportState, {
     season,
@@ -1244,12 +1271,16 @@ async function loadPlayersById() {
       "utf8"
     );
 
+    hasWarnedStalePlayerCache = false;
     return playersById;
   } catch (error) {
     const staleCachedPlayers = await readCachedPlayers(true);
     if (staleCachedPlayers) {
-      console.warn("Using stale Sleeper player cache because refresh failed.");
-      console.warn(error.message);
+      if (!hasWarnedStalePlayerCache) {
+        console.warn("Using stale Sleeper player cache because refresh failed.");
+        console.warn(error.message);
+        hasWarnedStalePlayerCache = true;
+      }
       return staleCachedPlayers;
     }
 
