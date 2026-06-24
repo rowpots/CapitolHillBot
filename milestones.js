@@ -150,26 +150,47 @@ export function detectMilestones({
     latestCompletedWeek >= PLAYOFF_ALERT_MIN_WEEK &&
     Array.isArray(report?.standings)
   ) {
+    const newClinches = [];
+    const newByeClinches = [];
+    const newEliminations = [];
+
     for (const team of report.standings) {
       const id = String(team.rosterId);
       if (team.playoffOdds >= CLINCH_THRESHOLD && !state.clinched.includes(id)) {
         state.clinched.push(id);
-        events.push(makeEvent("clinch", { label: team.label }));
+        newClinches.push(team.label);
       }
       if (
         (team.byeOdds ?? 0) >= CLINCH_THRESHOLD &&
         !state.byeClinched.includes(id)
       ) {
         state.byeClinched.push(id);
-        events.push(makeEvent("byeClinch", { label: team.label }));
+        newByeClinches.push(team.label);
       }
       if (
         team.playoffOdds <= ELIMINATION_THRESHOLD &&
         !state.eliminated.includes(id)
       ) {
         state.eliminated.push(id);
-        events.push(makeEvent("eliminated", { label: team.label }));
+        newEliminations.push(team.label);
       }
+    }
+
+    // Multiple teams can cross the same threshold in the same week (e.g. a
+    // tiebreaker resolves several playoff spots at once) — group those into
+    // one message per type instead of one per team.
+    if (newClinches.length > 0) {
+      events.push(makeGroupEvent("clinch", newClinches, { season, week: latestCompletedWeek }));
+    }
+    if (newByeClinches.length > 0) {
+      events.push(
+        makeGroupEvent("byeClinch", newByeClinches, { season, week: latestCompletedWeek })
+      );
+    }
+    if (newEliminations.length > 0) {
+      events.push(
+        makeGroupEvent("eliminated", newEliminations, { season, week: latestCompletedWeek })
+      );
     }
   }
 
@@ -319,16 +340,28 @@ function normalizeMilestoneState(milestoneState, season) {
   };
 }
 
-function makeEvent(type, { label }) {
+function joinLabels(labels) {
+  if (labels.length === 1) {
+    return labels[0];
+  }
+  if (labels.length === 2) {
+    return `${labels[0]} and ${labels[1]}`;
+  }
+  return `${labels.slice(0, -1).join(", ")}, and ${labels[labels.length - 1]}`;
+}
+
+function makeGroupEvent(type, labels, { season, week }) {
+  const verb = labels.length > 1 ? "have" : "has";
+  const joined = joinLabels(labels);
   const message =
     type === "clinch"
-      ? `🎉 ${label} has clinched a playoff spot!`
+      ? `🎉 ${joined} ${verb} clinched a playoff spot!`
       : type === "byeClinch"
-      ? `🛌 ${label} has clinched a first-round bye!`
-      : `❌ ${label} has been eliminated from playoff contention.`;
+      ? `🛌 ${joined} ${verb} clinched a first-round bye!`
+      : `❌ ${joined} ${verb} been eliminated from playoff contention.`;
 
   return {
-    id: `${type}-${label}`,
+    id: `${type}-${season}-${week}`,
     type,
     message,
     releaseAtTimestampMs: null,

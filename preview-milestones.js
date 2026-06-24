@@ -127,8 +127,27 @@ async function main() {
   console.log(`Total milestone messages over the season: ${total}`);
 
   if (args.send) {
-    const sample = milestoneState.queue[0];
-    if (!sample) {
+    let candidates = args.type
+      ? milestoneState.queue.filter((event) => event.type === args.type)
+      : milestoneState.queue;
+    if (args.week != null) {
+      candidates = candidates.filter((event) => event.id.endsWith(`-${args.week}`));
+    }
+    let samples;
+    if (args.sendDistinct) {
+      const seen = new Set();
+      samples = candidates.filter((event) => {
+        const key = subtypeKey(event);
+        if (seen.has(key)) {
+          return false;
+        }
+        seen.add(key);
+        return true;
+      });
+    } else {
+      samples = args.sendAll ? candidates : candidates.slice(0, 1);
+    }
+    if (samples.length === 0) {
       console.log("No milestone events to send as a sample.");
       return;
     }
@@ -137,7 +156,10 @@ async function main() {
     if (!targetChatId) {
       throw new Error("Missing test chat id. Pass --chat-id or set TEST_SNAPCHAT_GROUP_CHAT_ID.");
     }
-    await sendSampleToChat({ chatId: targetChatId, message: sample.message });
+    await sendSamplesToChat({
+      chatId: targetChatId,
+      messages: samples.map((event) => event.message),
+    });
   }
 }
 
@@ -191,18 +213,27 @@ async function fetchJson(url) {
   return response.json();
 }
 
-async function sendSampleToChat({ chatId, message }) {
+async function sendSamplesToChat({ chatId, messages }) {
   if (!credentials.username || !credentials.password) {
     throw new Error("Missing USER_NAME / USER_PASSWORD for --send.");
   }
 
   const bot = new SnapBot();
   try {
-    console.log(`\nSending sample milestone to test chat ${chatId}`);
+    console.log(`\nSending ${messages.length} milestone message(s) to test chat ${chatId}`);
     await startSnapchatSession(bot);
-    await bot.openMessagingHome();
-    await bot.sendMessage({ chat: chatId, message, exit: false });
-    console.log("Sample milestone sent.");
+    for (const [index, message] of messages.entries()) {
+      if (index > 0) {
+        // Give Snapchat's UI a moment to settle between sends; firing them
+        // back-to-back risks the message getting typed but never submitted.
+        await delay(4000);
+      }
+      // openMessagingHome() must be called before each send in a session, or
+      // the first message after it gets dropped (chat/textbox not settled).
+      await bot.openMessagingHome();
+      await bot.sendMessage({ chat: chatId, message, exit: false });
+      console.log(`Sent ${index + 1}/${messages.length}.`);
+    }
   } finally {
     if (bot.browser) {
       await bot.closeBrowser().catch(() => {});
@@ -256,8 +287,22 @@ function parseArgs(rawArgs) {
     const arg = rawArgs[index];
     if (arg === "--send") {
       options.send = true;
+    } else if (arg === "--send-all") {
+      options.sendAll = true;
+    } else if (arg === "--send-distinct") {
+      options.sendDistinct = true;
     } else if (arg === "--previous") {
       options.previous = true;
+    } else if (arg.startsWith("--type=")) {
+      options.type = arg.slice("--type=".length);
+    } else if (arg === "--type") {
+      options.type = rawArgs[index + 1];
+      index += 1;
+    } else if (arg.startsWith("--week=")) {
+      options.week = arg.slice("--week=".length);
+    } else if (arg === "--week") {
+      options.week = rawArgs[index + 1];
+      index += 1;
     } else if (arg.startsWith("--league-id=")) {
       options.leagueId = arg.slice("--league-id=".length);
     } else if (arg === "--league-id") {
@@ -271,6 +316,18 @@ function parseArgs(rawArgs) {
     }
   }
   return options;
+}
+
+function subtypeKey(event) {
+  // Record events share type "record" but have distinct id prefixes per kind
+  // (record-highestScore-..., record-lowestScore-..., record-blowout-...,
+  // record-streak-...); other event types (clinch/byeClinch/eliminated) are
+  // already one subtype each.
+  return event.type === "record" ? event.id.split("-").slice(0, 2).join("-") : event.type;
+}
+
+function delay(milliseconds) {
+  return new Promise((resolve) => setTimeout(resolve, milliseconds));
 }
 
 function parseInteger(value, fallbackValue) {

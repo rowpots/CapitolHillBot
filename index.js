@@ -709,25 +709,28 @@ async function flushMilestones() {
     return;
   }
 
-  for (const event of due) {
-    if (config.dryRun) {
+  if (config.dryRun) {
+    for (const event of due) {
       console.log(`[Dry Run] Milestone: ${event.message.replace(/\n/g, " / ")}`);
       milestoneState.queue = milestoneState.queue.filter((item) => item.id !== event.id);
-      continue;
     }
-
-    try {
-      await sendChatMessage(event.message, `milestone ${event.type}`);
-      milestoneState.queue = milestoneState.queue.filter((item) => item.id !== event.id);
-      await saveMilestoneState(milestoneState);
-    } catch (error) {
-      console.warn(`Milestone send failed for ${event.id}; staying queued.`);
-      console.warn(error.message);
-    }
+    await saveMilestoneState(milestoneState);
+    return;
   }
 
-  if (config.dryRun) {
+  // Send at most one milestone per poll cycle. If a backlog ever builds up
+  // (e.g. the bot was offline past several release slots), this makes it
+  // trickle out one message per pollIntervalMs instead of bursting them all
+  // at once back-to-back, which both looks like spam and risks Snapchat's
+  // UI dropping a send when the textbox hasn't settled from the last one.
+  const [event] = due;
+  try {
+    await sendChatMessage(event.message, `milestone ${event.type}`);
+    milestoneState.queue = milestoneState.queue.filter((item) => item.id !== event.id);
     await saveMilestoneState(milestoneState);
+  } catch (error) {
+    console.warn(`Milestone send failed for ${event.id}; staying queued.`);
+    console.warn(error.message);
   }
 }
 
