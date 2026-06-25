@@ -35,6 +35,10 @@ import {
   getDivisionNames,
   RIVALRY_QUARTER_WEEKS,
 } from "./division-rivalry.js";
+import {
+  buildDraftPreviewReport,
+  isWithinDraftPreviewWindow,
+} from "./draft-preview.js";
 
 dotenv.config();
 installTimestampedConsole();
@@ -60,6 +64,10 @@ const DIVISION_RIVALRY_STATE_FILE = path.join(
 const BIG_MATCHUPS_STATE_FILE = path.join(
   STATE_DIR,
   "big-matchups-state.json"
+);
+const DRAFT_PREVIEW_STATE_FILE = path.join(
+  STATE_DIR,
+  "draft-preview-state.json"
 );
 const MILESTONE_STATE_FILE = path.join(STATE_DIR, "milestone-state.json");
 const RECORD_BOOK_FILE = path.join(STATE_DIR, "record-book.json");
@@ -139,6 +147,11 @@ const config = {
     0,
     Math.min(59, parseInteger(process.env.BIG_MATCHUPS_SEND_MINUTE_ET, 45))
   ),
+  draftPreviewEnabled: parseBoolean(process.env.DRAFT_PREVIEW_ENABLED, true),
+  draftPreviewLeadHours: Math.max(
+    1,
+    parseInteger(process.env.DRAFT_PREVIEW_LEAD_HOURS, 48)
+  ),
 };
 
 const bot = new SnapBot();
@@ -173,6 +186,7 @@ async function main() {
   const powerRankingsState = await loadPowerRankingsState();
   const divisionRivalryState = await loadDivisionRivalryState();
   const bigMatchupsState = await loadBigMatchupsState();
+  const draftPreviewState = await loadDraftPreviewState();
 
   if (!config.dryRun) {
     await startSnapchatSession();
@@ -208,6 +222,7 @@ async function main() {
       await pollForPowerRankings(powerRankingsState);
       await pollForDivisionRivalry(divisionRivalryState);
       await pollForBigMatchups(bigMatchupsState);
+      await pollForDraftPreview(draftPreviewState);
       await pollForTrades(state);
     } catch (error) {
       console.error("Polling cycle failed, but the bot will keep running.");
@@ -826,6 +841,85 @@ async function pollForBigMatchups(bigMatchupsState) {
     leagueId: config.sleeperLeagueId,
   });
   await saveBigMatchupsState(bigMatchupsState);
+}
+
+async function pollForDraftPreview(draftPreviewState) {
+  if (!config.draftPreviewEnabled) {
+    return;
+  }
+
+  const league = await fetchJson(
+    `https://api.sleeper.app/v1/league/${config.sleeperLeagueId}`
+  );
+  const draftId = String(league?.draft_id ?? "").trim();
+  if (!draftId) {
+    return;
+  }
+
+  const draft = await fetchJson(`https://api.sleeper.app/v1/draft/${draftId}`);
+  const startTimeMs = Number(draft?.start_time);
+  if (
+    !isWithinDraftPreviewWindow(
+      Date.now(),
+      startTimeMs,
+      config.draftPreviewLeadHours
+    )
+  ) {
+    return;
+  }
+
+  if (hasSentDraftPreview(draftPreviewState, draftId)) {
+    return;
+  }
+
+  const [rosters, users, tradedPicks, playersById] = await Promise.all([
+    fetchJson(`https://api.sleeper.app/v1/league/${config.sleeperLeagueId}/rosters`),
+    fetchJson(`https://api.sleeper.app/v1/league/${config.sleeperLeagueId}/users`),
+    fetchJson(`https://api.sleeper.app/v1/league/${config.sleeperLeagueId}/traded_picks`),
+    loadPlayersById(),
+  ]);
+
+  let valueBook = null;
+  try {
+    valueBook = await loadDynastyValueBook({
+      cacheDir: STATE_DIR,
+      preferredMode: config.dynastyValueMode,
+      league,
+      logger: console,
+    });
+  } catch (error) {
+    console.warn("Dynasty values are unavailable for the draft preview.");
+    console.warn(error.message);
+  }
+
+  const draftPreviewReport = buildDraftPreviewReport({
+    league,
+    draft,
+    rosters,
+    users,
+    tradedPicks,
+    playersById,
+    valueBook,
+  });
+
+  if (!draftPreviewReport) {
+    console.log("Draft preview skipped: draft order is unavailable.");
+  } else if (config.dryRun) {
+    console.log(`[Dry Run] ${draftPreviewReport.textMessage}`);
+    return;
+  } else {
+    await sendChatMessage(draftPreviewReport.textMessage, "rookie draft preview");
+  }
+
+  if (config.dryRun) {
+    return;
+  }
+
+  markDraftPreviewSent(draftPreviewState, {
+    draftId,
+    leagueId: config.sleeperLeagueId,
+  });
+  await saveDraftPreviewState(draftPreviewState);
 }
 
 async function refreshMilestones({
@@ -1967,6 +2061,53 @@ async function saveBigMatchupsState(state) {
     JSON.stringify(serialized, null, 2),
     "utf8"
   );
+}
+
+async function loadDraftPreviewState() {
+  await fs.mkdir(STATE_DIR, { recursive: true });
+
+  try {
+    const fileContents = await fs.readFile(DRAFT_PREVIEW_STATE_FILE, "utf8");
+    const parsed = parseJsonFile(fileContents);
+
+    return {
+      sentByDraftId: parsed?.sentByDraftId ?? {},
+    };
+  } catch (error) {
+    return {
+      sentByDraftId: {},
+    };
+  }
+}
+
+async function saveDraftPreviewState(state) {
+  await fs.mkdir(STATE_DIR, { recursive: true });
+
+  const serialized = {
+    updatedAt: new Date().toISOString(),
+    sentByDraftId: state.sentByDraftId ?? {},
+  };
+
+  await fs.writeFile(
+    DRAFT_PREVIEW_STATE_FILE,
+    JSON.stringify(serialized, null, 2),
+    "utf8"
+  );
+}
+
+function hasSentDraftPreview(state, draftId) {
+  return Boolean(state?.sentByDraftId?.[draftId]);
+}
+
+function markDraftPreviewSent(state, { draftId, leagueId }) {
+  if (!state.sentByDraftId) {
+    state.sentByDraftId = {};
+  }
+
+  state.sentByDraftId[draftId] = {
+    sentAt: new Date().toISOString(),
+    leagueId,
+  };
 }
 
 async function loadPowerRankingsState() {

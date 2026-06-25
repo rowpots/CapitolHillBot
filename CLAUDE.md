@@ -113,6 +113,35 @@ give 2-6 of 6 matchups classified per week instead of a blanket 6/6.
 Preview/test: `npm run preview-big-matchups -- --previous` replays Weeks 8-14; `--week N --send`
 pushes one specific week to the test chat.
 
+## Rookie draft preview (one-time, lead-time countdown)
+
+Not a recurring weekly post — fires once per season, in `draft-preview.js`, on a countdown before
+the rookie draft's own `start_time` (`league.draft_id` → `GET /v1/draft/{id}`) rather than a fixed
+weekday/hour gate, so it naturally recurs correctly every year regardless of which day the league
+schedules its draft. Gate: `isWithinDraftPreviewWindow(now, draft.start_time,
+DRAFT_PREVIEW_LEAD_HOURS)` (default 48h lead). State: `.state/draft-preview-state.json`, keyed by
+`draft_id` (one-shot per draft, not season+week — a new draft gets a new `draft_id` next year, so
+no extra season-rollover logic is needed). Toggle: `DRAFT_PREVIEW_ENABLED`.
+
+**Round 1 order isn't just `slot_to_roster_id`.** That field only reflects each slot's *originally
+assigned* roster — with pick trading on, a slot's real current owner has to be cross-checked
+against `GET /v1/league/{id}/traded_picks` (matched on `round`+`season`+`roster_id`, using the
+entry's `owner_id` when present). Confirmed against this league's live data: one Round 1 pick is
+already traded, and `resolveRoundOneOrder` correctly resolves it to the new owner. Only Round 1 is
+shown (plus a "`N` rounds, `M` picks total" summary line) — all 4 rounds would be a wall of text.
+
+**Rookie filtering has a real gotcha:** `years_exp === 0` alone also matches long-retired players
+whose historical records never got the field populated (e.g. Kurt Warner shows `years_exp: 0`).
+Adding `&& active === true` is what actually narrows the cached player index
+(`.state/players-nfl.json`) down to the real current draft class. `selectTopAvailableRookies` then
+excludes anyone already on a roster/taxi squad and ranks the rest by
+`dynasty-values.js`'s `getPlayerValue()`, showing the top 12 (no raw value numbers shown — same
+"keep it casual" precedent as Big Matchups omitting raw odds%).
+
+Preview/test: `npm run preview-draft-preview` (no live state writes); `--send` pushes to the test
+chat. No `--previous` mode — unlike the other previews, there's no "replay a past week" concept
+here (a past draft's "available rookies" aren't rookies/available anymore).
+
 ## Milestone alerts (playoff clinch/elimination + all-time record book)
 
 Event-driven, in `milestones.js`. Detected once when a week's results are final (called from

@@ -78,6 +78,8 @@ These are the important ones:
 - `DIVISION_RIVALRY_ENABLED`: quarterly interdivision rivalry post, `true` or `false`, default `true`
 - `BIG_MATCHUPS_ENABLED`: Thursday marquee-matchups preview, `true` or `false`, default `true`
 - `BIG_MATCHUPS_SEND_HOUR_ET` / `BIG_MATCHUPS_SEND_MINUTE_ET`: Thursday send time in Eastern time, default `19:45`
+- `DRAFT_PREVIEW_ENABLED`: one-time rookie draft preview, `true` or `false`, default `true`
+- `DRAFT_PREVIEW_LEAD_HOURS`: hours before the draft's start time to send the preview, default `48`
 - `HEADLESS`: `false` is easier for debugging
 - `DRY_RUN`: `true` logs instead of sending to Snapchat
 - `RUN_ONCE`: `true` checks once and exits
@@ -395,6 +397,51 @@ npm run preview-division-rivalry -- --previous
 ```
 
 Add `--send` to push the most recent checkpoint to the test chat.
+
+## Rookie Draft Preview
+
+A one-time-per-season post counting down to the league's rookie draft — not a recurring weekly
+send. Fires `DRAFT_PREVIEW_LEAD_HOURS` (default 48) before the draft's own scheduled start time, so
+it always lands at the right moment regardless of which day the league schedules its draft each
+year. Toggle with `DRAFT_PREVIEW_ENABLED`.
+
+Each post includes:
+
+- The draft's formatted start time (Eastern) plus a "`N` rounds, `M` picks total" summary
+- **Round 1 order**, resolved through any traded picks — if a Round 1 pick has changed hands, the
+  post shows the team that actually owns it now, not the team it was originally assigned to
+- **Top 12 available rookies**, ranked by dynasty trade value, name + position + NFL team only (no
+  raw value numbers, to keep it readable)
+
+```text
+🎓 Capitol Hill Rookie Draft Preview
+———————————————————————————
+
+Draft kicks off Jun 28, 2026, 7:30 PM ET — 4 rounds, 48 picks total
+
+Round 1 Order
+1. NewGM
+2. Thejigler
+3. oJacob
+...
+12. oJacob
+
+🔥 Top Available Rookies
+1. Jeremiyah Love (RB, ARI)
+2. Carnell Tate (WR, TEN)
+...
+12. Antonio Williams (WR, WAS)
+```
+
+Preview the real upcoming draft (no Snapchat):
+
+```bash
+npm run preview-draft-preview
+```
+
+Add `--send` to push it to the test chat. There's no `--previous` replay mode here — a past
+draft's "available rookies" aren't rookies/available anymore, so replaying an old season wouldn't
+mean anything useful.
 
 ## Trade Message Format
 
