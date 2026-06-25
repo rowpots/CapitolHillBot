@@ -75,6 +75,7 @@ These are the important ones:
 - `POWER_RANKING_SEND_HOUR_ET`: Thursday send hour in Eastern time, default `19` (7 PM)
 - `PLAYOFF_ALERTS_ENABLED`: playoff clinch/elimination alerts, `true` or `false`, default `true`
 - `RECORD_BOOK_ENABLED`: all-time record-book alerts, `true` or `false`, default `true`
+- `DIVISION_RIVALRY_ENABLED`: quarterly interdivision rivalry post, `true` or `false`, default `true`
 - `HEADLESS`: `false` is easier for debugging
 - `DRY_RUN`: `true` logs instead of sending to Snapchat
 - `RUN_ONCE`: `true` checks once and exits
@@ -291,6 +292,60 @@ npm run preview-milestones -- --previous
 ```
 
 Add `--send` to push one sample event to the test chat.
+
+## Division Rivalry Tracker
+
+A quarterly bragging-rights post for the league's two divisions, tallying the interdivision
+head-to-head record (games where a team from one division played a team from the other — games
+between two teams in the same division don't count). Posted on **Wednesdays**, not every week —
+only once per quarter of the 14-week regular season, after Weeks **4, 7, 11, and 14** complete.
+Toggle with `DIVISION_RIVALRY_ENABLED`. Division names come from the league's own division
+settings, not hardcoded.
+
+Each post includes:
+
+- This season's series record and an **all-time series record** (seeded across every prior
+  season via Sleeper's `previous_league_id` chain — a season only contributes if its two
+  division names match this season's, so a league that renamed or reorganized divisions doesn't
+  produce a misleading number)
+- Total points scored by each division in interdivision play
+- The quarter's biggest interdivision blowout and closest interdivision game
+- Each division's best ("🔥 MVP") and worst ("🧊 Bust") interdivision performer by record
+
+```text
+🏛️ Capitol Hill Division Rivalry — Through Week 7
+———————————————————————————————————
+
+Republicans vs. Democrats
+This season: tied 6-6 · 12 games played
+All-time: Republicans lead 45-38-2 (3 seasons)
+
+📊 Total Points: Republicans 1,484.9 - 1,424.1 Democrats
+
+💥 Biggest Blowout (Wk 7)
+goodforyousister def. Alexandria Ocasio-Cortez by 73.6
+
+😬 Closest Game (Wk 6)
+JoshPT def. Team Ayahuasca 🗿 by 6.6
+
+🔥 Republicans MVP: goodforyousister (2-0)
+🧊 Republicans Bust: Thejigler (0-2)
+
+🔥 Democrats MVP: Hayden9999999 (2-0)
+🧊 Democrats Bust: Jme33708 (0-2)
+```
+
+If zero interdivision games have happened yet by a quarter boundary (the schedule can cluster
+intra-division games early in some seasons), the post is silently skipped rather than sending an
+empty/misleading message.
+
+Preview a season's quarterly checkpoints (no Snapchat):
+
+```bash
+npm run preview-division-rivalry -- --previous
+```
+
+Add `--send` to push the most recent checkpoint to the test chat.
 
 ## Trade Message Format
 

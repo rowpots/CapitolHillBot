@@ -39,6 +39,38 @@ user-facing guide and env reference.
   (e.g. multiple trades hitting the same `TRADE_PRIME_TIME_SEND_HOUR_ET` slot) — sending several
   back-to-back risks Snapchat dropping a send mid-burst, on top of looking like spam.
 
+## Division rivalry tracker (Wednesdays, quarterly)
+
+Interdivision bragging-rights post, in `division-rivalry.js`. Not weekly — posted on Wednesday
+after the regular-season report cycle, only once each quarter
+(`RIVALRY_QUARTER_WEEKS = [4, 7, 11, 14]`), via `pollForDivisionRivalry` in `index.js` (same gate
+shape as `pollForWeeklyReport`, using `isWeekdayAfterHourInEastern(now, "Wednesday", ...)`).
+`buildDivisionRivalryReport` walks every completed week's matchups and tallies only games where
+the two sides are in different `roster.settings.division` values (intra-division games don't
+count): the season series record, total points per division, the quarter's biggest
+blowout/closest game (via the shared `formatMatchupLine`/`truncateLabel` helpers also used by the
+weekly recap), and a per-team interdivision win/loss tally used to call out each division's best
+("🔥 MVP") and worst ("🧊 Bust") performer. Division names come from `league.metadata.division_1`/
+`division_2` rather than being hardcoded (`getDivisionNames`). The header divider is sized
+dynamically (`"—".repeat(headerLine.length - 15)`, floored at `STANDINGS_DIVIDER.length`) — a
+divider matching the full header wrapped to a second line on mobile, so it's intentionally
+trimmed back from the header's exact width.
+
+`buildAllTimeDivisionSeries` (async, takes `fetchJson`) separately walks the `previous_league_id`
+chain like the milestone record book does, re-tallying the same interdivision series across every
+prior season — but only seasons whose `division_1`/`division_2` names match the current season's
+exactly are counted, since roster IDs and division numbers aren't stable across seasons (a season
+with different/no division names is silently skipped rather than mismapped). Called fresh each of
+the 4 times per season `pollForDivisionRivalry` actually does work — not cached/state-backed,
+since that's cheap enough at this frequency.
+
+Returns `null` (and the poll skips sending) if zero interdivision games have happened
+yet — confirmed via replay that this can genuinely occur for a whole quarter if the schedule
+clusters intra-division games early. State: `.state/division-rivalry-state.json`, same
+season+week dedup shape as weekly-report state. Toggle: `DIVISION_RIVALRY_ENABLED`.
+Preview/test: `npm run preview-division-rivalry -- --previous` replays a season through each
+quarter boundary; `--send` pushes the most recent one to the test chat.
+
 ## Power rankings (Thursdays)
 
 Posted Thursdays at `POWER_RANKING_SEND_HOUR_ET` (default 19), **Weeks 2–14**, once per week,

@@ -16,6 +16,7 @@ import {
   findLatestCompletedWeek,
   isThursdayAfterHourInEastern,
   isTuesdayAfterHourInEastern,
+  isWeekdayAfterHourInEastern,
 } from "./weekly-report.js";
 import {
   buildRecordBookFromHistory,
@@ -23,6 +24,12 @@ import {
   createEmptyRecordBook,
   detectMilestones,
 } from "./milestones.js";
+import {
+  buildAllTimeDivisionSeries,
+  buildDivisionRivalryReport,
+  getDivisionNames,
+  RIVALRY_QUARTER_WEEKS,
+} from "./division-rivalry.js";
 
 dotenv.config();
 installTimestampedConsole();
@@ -40,6 +47,10 @@ const WEEKLY_REPORT_STATE_FILE = path.join(
 const POWER_RANKINGS_STATE_FILE = path.join(
   STATE_DIR,
   "power-rankings-state.json"
+);
+const DIVISION_RIVALRY_STATE_FILE = path.join(
+  STATE_DIR,
+  "division-rivalry-state.json"
 );
 const MILESTONE_STATE_FILE = path.join(STATE_DIR, "milestone-state.json");
 const RECORD_BOOK_FILE = path.join(STATE_DIR, "record-book.json");
@@ -106,6 +117,10 @@ const config = {
   ),
   playoffAlertsEnabled: parseBoolean(process.env.PLAYOFF_ALERTS_ENABLED, true),
   recordBookEnabled: parseBoolean(process.env.RECORD_BOOK_ENABLED, true),
+  divisionRivalryEnabled: parseBoolean(
+    process.env.DIVISION_RIVALRY_ENABLED,
+    true
+  ),
 };
 
 const bot = new SnapBot();
@@ -138,6 +153,7 @@ async function main() {
   const state = await loadState();
   const weeklyReportState = await loadWeeklyReportState();
   const powerRankingsState = await loadPowerRankingsState();
+  const divisionRivalryState = await loadDivisionRivalryState();
 
   if (!config.dryRun) {
     await startSnapchatSession();
@@ -171,6 +187,7 @@ async function main() {
       await flushMilestones();
       await pollForWeeklyReport(weeklyReportState);
       await pollForPowerRankings(powerRankingsState);
+      await pollForDivisionRivalry(divisionRivalryState);
       await pollForTrades(state);
     } catch (error) {
       console.error("Polling cycle failed, but the bot will keep running.");
@@ -596,6 +613,99 @@ async function pollForPowerRankings(powerRankingsState) {
     order: powerRankings.order,
   };
   await savePowerRankingsState(powerRankingsState);
+}
+
+async function pollForDivisionRivalry(divisionRivalryState) {
+  if (!config.divisionRivalryEnabled) {
+    return;
+  }
+
+  const now = new Date();
+  if (!isWeekdayAfterHourInEastern(now, "Wednesday", config.weeklyReportSendHourEt)) {
+    return;
+  }
+
+  const league = await fetchJson(
+    `https://api.sleeper.app/v1/league/${config.sleeperLeagueId}`
+  );
+  const season = String(league?.season ?? "").trim();
+
+  if (!season) {
+    console.warn("Division rivalry tracker skipped because the Sleeper season is unavailable.");
+    return;
+  }
+
+  const matchupsByWeek = await fetchMatchupsByWeek({
+    leagueId: config.sleeperLeagueId,
+    startWeek: 1,
+    endWeek: REGULAR_SEASON_END_WEEK,
+  });
+  const latestCompletedWeek = findLatestCompletedWeek(
+    matchupsByWeek,
+    REGULAR_SEASON_END_WEEK
+  );
+
+  // Only post on the Wednesday right after a quarter boundary completes, not
+  // every week.
+  if (!RIVALRY_QUARTER_WEEKS.includes(latestCompletedWeek)) {
+    return;
+  }
+
+  if (hasSentWeeklyReport(divisionRivalryState, season, latestCompletedWeek)) {
+    return;
+  }
+
+  const [rosters, users] = await Promise.all([
+    fetchJson(`https://api.sleeper.app/v1/league/${config.sleeperLeagueId}/rosters`),
+    fetchJson(`https://api.sleeper.app/v1/league/${config.sleeperLeagueId}/users`),
+  ]);
+
+  let allTimeSeries = null;
+  try {
+    allTimeSeries = await buildAllTimeDivisionSeries({
+      league,
+      fetchJson,
+      regularSeasonEndWeek: REGULAR_SEASON_END_WEEK,
+      currentThroughWeek: latestCompletedWeek,
+      currentDivisionNames: getDivisionNames(league),
+      logger: console,
+    });
+  } catch (error) {
+    console.warn("Division rivalry all-time series lookup failed; sending without it.");
+    console.warn(error.message);
+  }
+
+  const rivalryReport = buildDivisionRivalryReport({
+    league,
+    rosters,
+    users,
+    matchupsByWeek,
+    throughWeek: latestCompletedWeek,
+    allTimeSeries,
+  });
+
+  if (!rivalryReport) {
+    console.log("Division rivalry tracker skipped: no interdivision games played yet.");
+  } else if (config.dryRun) {
+    console.log(`[Dry Run] ${rivalryReport.textMessage}`);
+    return;
+  } else {
+    await sendChatMessage(
+      rivalryReport.textMessage,
+      `division rivalry tracker for week ${latestCompletedWeek}`
+    );
+  }
+
+  if (config.dryRun) {
+    return;
+  }
+
+  markWeeklyReportSent(divisionRivalryState, {
+    season,
+    week: latestCompletedWeek,
+    leagueId: config.sleeperLeagueId,
+  });
+  await saveDivisionRivalryState(divisionRivalryState);
 }
 
 async function refreshMilestones({
@@ -1670,6 +1780,38 @@ async function saveWeeklyReportState(state) {
 
   await fs.writeFile(
     WEEKLY_REPORT_STATE_FILE,
+    JSON.stringify(serialized, null, 2),
+    "utf8"
+  );
+}
+
+async function loadDivisionRivalryState() {
+  await fs.mkdir(STATE_DIR, { recursive: true });
+
+  try {
+    const fileContents = await fs.readFile(DIVISION_RIVALRY_STATE_FILE, "utf8");
+    const parsed = parseJsonFile(fileContents);
+
+    return {
+      sentBySeason: parsed?.sentBySeason ?? {},
+    };
+  } catch (error) {
+    return {
+      sentBySeason: {},
+    };
+  }
+}
+
+async function saveDivisionRivalryState(state) {
+  await fs.mkdir(STATE_DIR, { recursive: true });
+
+  const serialized = {
+    updatedAt: new Date().toISOString(),
+    sentBySeason: state.sentBySeason ?? {},
+  };
+
+  await fs.writeFile(
+    DIVISION_RIVALRY_STATE_FILE,
     JSON.stringify(serialized, null, 2),
     "utf8"
   );

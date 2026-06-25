@@ -1,9 +1,9 @@
 const DEFAULT_SIMULATION_COUNT = 10000;
 const DEFAULT_REGULAR_SEASON_END_WEEK = 14;
 const DEFAULT_PLAYOFF_TEAM_COUNT = 6;
-const DEFAULT_TEAM_NAME_MAX_LENGTH = 24;
+export const DEFAULT_TEAM_NAME_MAX_LENGTH = 24;
 const EASTERN_TIME_ZONE = "America/New_York";
-const STANDINGS_DIVIDER = "———————————————————————————";
+export const STANDINGS_DIVIDER = "———————————————————————————";
 const POWER_RANKING_WEIGHTS = {
   scoring: 0.4,
   allPlay: 0.25,
@@ -264,7 +264,7 @@ export function formatWeeklyRecapMessage({
   );
 }
 
-function formatMatchupLine({ winner, loser, margin, isTie }) {
+export function formatMatchupLine({ winner, loser, margin, isTie }) {
   const winnerLabel = truncateLabel(winner, DEFAULT_TEAM_NAME_MAX_LENGTH);
   const loserLabel = truncateLabel(loser, DEFAULT_TEAM_NAME_MAX_LENGTH);
 
@@ -891,14 +891,14 @@ function formatPercent(value) {
   return `${Math.round((value ?? 0) * 100)}%`;
 }
 
-function formatOneDecimal(value) {
+export function formatOneDecimal(value) {
   return new Intl.NumberFormat("en-US", {
     minimumFractionDigits: 1,
     maximumFractionDigits: 1,
   }).format(value ?? 0);
 }
 
-function truncateLabel(value, maxLength) {
+export function truncateLabel(value, maxLength) {
   const label = String(value ?? "").trim();
   if (label.length <= maxLength) {
     return label;
