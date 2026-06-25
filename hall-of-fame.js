@@ -14,13 +14,22 @@ export function createEmptyHallOfFame() {
     seededFromHistory: false,
     seededAt: null,
     lastMergedSeason: null,
-    careerStatsByUserId: {},
+    // Keyed by roster_id (the team *franchise*), not owner user_id. This league
+    // is a dynasty where the roster slot is the thing that persists across
+    // seasons -- when a manager leaves, a new manager inherits the same
+    // roster_id (verified: roster_id is stable across the previous_league_id
+    // rollover). Tracking the franchise means an orphaned team's history
+    // follows the slot to whoever owns it now, instead of being stranded under
+    // a departed manager. The current owner + display name is resolved fresh at
+    // render time (buildHallOfFameReport), so a takeover -- even a future one --
+    // never needs a re-seed.
+    careerStatsByRosterId: {},
   };
 }
 
-function ensureCareerEntry(hallOfFame, userId) {
-  if (!hallOfFame.careerStatsByUserId[userId]) {
-    hallOfFame.careerStatsByUserId[userId] = {
+function ensureCareerEntry(hallOfFame, rosterId) {
+  if (!hallOfFame.careerStatsByRosterId[rosterId]) {
+    hallOfFame.careerStatsByRosterId[rosterId] = {
       wins: 0,
       losses: 0,
       ties: 0,
@@ -31,7 +40,7 @@ function ensureCareerEntry(hallOfFame, userId) {
       seasonsPlayed: 0,
     };
   }
-  return hallOfFame.careerStatsByUserId[userId];
+  return hallOfFame.careerStatsByRosterId[rosterId];
 }
 
 // Any roster appearing as a *direct* (non-placeholder) t1/t2 value anywhere
@@ -64,9 +73,11 @@ export function mergeSeasonIntoHallOfFame(
     return hallOfFame;
   }
 
-  const userIdByRosterId = new Map(
-    (rosters ?? []).map((roster) => [String(roster.roster_id), String(roster.owner_id ?? "")])
-  );
+  // Everything below is keyed by roster_id directly -- W-L-T/points come from
+  // each matchup entry's roster_id, and championships/playoff appearances are
+  // already expressed in roster_id terms by the bracket. Owner identity is
+  // deliberately *not* resolved here; it's resolved at render time so the
+  // franchise's whole history always displays under its current owner.
 
   // Regular season only -- career W-L-T/points-for mirrors what this league's
   // own standings have always meant (weeks 1..regularSeasonEndWeek); playoff
@@ -84,14 +95,12 @@ export function mergeSeasonIntoHallOfFame(
       }
 
       const [left, right] = pair;
-      const leftUserId = userIdByRosterId.get(left.rosterId);
-      const rightUserId = userIdByRosterId.get(right.rosterId);
-      if (!leftUserId || !rightUserId) {
+      if (!left.rosterId || !right.rosterId) {
         continue;
       }
 
-      const leftCareer = ensureCareerEntry(hallOfFame, leftUserId);
-      const rightCareer = ensureCareerEntry(hallOfFame, rightUserId);
+      const leftCareer = ensureCareerEntry(hallOfFame, left.rosterId);
+      const rightCareer = ensureCareerEntry(hallOfFame, right.rosterId);
 
       leftCareer.pointsFor += left.points;
       rightCareer.pointsFor += right.points;
@@ -111,31 +120,22 @@ export function mergeSeasonIntoHallOfFame(
   }
 
   for (const roster of rosters ?? []) {
-    const userId = String(roster.owner_id ?? "");
-    if (userId) {
-      ensureCareerEntry(hallOfFame, userId).seasonsPlayed += 1;
+    const rosterId = String(roster.roster_id ?? "");
+    if (rosterId) {
+      ensureCareerEntry(hallOfFame, rosterId).seasonsPlayed += 1;
     }
   }
 
   for (const rosterId of collectPlayoffRosterIds(winnersBracket)) {
-    const userId = userIdByRosterId.get(rosterId);
-    if (userId) {
-      ensureCareerEntry(hallOfFame, userId).playoffAppearances += 1;
-    }
+    ensureCareerEntry(hallOfFame, rosterId).playoffAppearances += 1;
   }
 
   const championshipEntry = findPlacementEntry(winnersBracket, 1);
   if (championshipEntry?.w != null) {
-    const championUserId = userIdByRosterId.get(String(championshipEntry.w));
-    if (championUserId) {
-      ensureCareerEntry(hallOfFame, championUserId).championships += 1;
-    }
+    ensureCareerEntry(hallOfFame, String(championshipEntry.w)).championships += 1;
   }
   if (championshipEntry?.l != null) {
-    const runnerUpUserId = userIdByRosterId.get(String(championshipEntry.l));
-    if (runnerUpUserId) {
-      ensureCareerEntry(hallOfFame, runnerUpUserId).runnerUps += 1;
-    }
+    ensureCareerEntry(hallOfFame, String(championshipEntry.l)).runnerUps += 1;
   }
 
   hallOfFame.lastMergedSeason = season;
@@ -250,8 +250,14 @@ export async function buildHallOfFameFromHistory({
   return hallOfFame;
 }
 
-function formatUserLabel(userId, userLookup) {
-  const user = userLookup.get(String(userId));
+// Resolves a franchise (roster_id) to its *current* owner's name. The roster
+// slot's whole career renders under whoever holds it today -- so an orphaned
+// team taken over by a new manager shows under the new manager, and a manager
+// who just renamed their team shows the new name. The userId hop here (roster
+// -> current owner -> user) is exactly what makes that work.
+function formatFranchiseLabel(rosterId, ownerIdByRosterId, userLookup) {
+  const ownerId = ownerIdByRosterId.get(String(rosterId));
+  const user = ownerId ? userLookup.get(String(ownerId)) : null;
   const teamName = user?.metadata?.team_name?.trim();
   const displayName = user?.display_name?.trim();
 
@@ -263,26 +269,30 @@ function formatUserLabel(userId, userLookup) {
     return displayName;
   }
 
-  // No entry in the *current* season's users list at all -- a manager who's
-  // since left the league. A raw 18-digit Sleeper snowflake id reads as
-  // noise once truncated to fit the label width, so shorten it up front.
-  return `Former Manager #${String(userId).slice(-6)}`;
+  // The franchise has no owner in the *current* league at all -- only happens
+  // if the league contracted and this roster slot no longer exists. Label it
+  // by its slot number rather than dropping its history entirely.
+  return `Team #${rosterId}`;
 }
 
-// Keyed directly by userId, so unlike formatRosterLabel this needs no
-// rosterId hop -- only the *current* season's users list, since career
-// stats should always render under each manager's current name.
-export function buildHallOfFameReport({ league, users, hallOfFame }) {
+// Career stats are keyed by roster_id (the franchise); this resolves each one
+// to its current owner via the current league's rosters, so the whole of a
+// team slot's history -- including any seasons played by managers who have
+// since left -- renders under whoever owns that slot now.
+export function buildHallOfFameReport({ league, users, rosters, hallOfFame }) {
   const userLookup = buildUserLookup(users);
+  const ownerIdByRosterId = new Map(
+    (rosters ?? []).map((roster) => [String(roster.roster_id), String(roster.owner_id ?? "")])
+  );
   const leagueName = String(league?.name ?? "League").trim() || "League";
-  const careerStatsByUserId = hallOfFame?.careerStatsByUserId ?? {};
+  const careerStatsByRosterId = hallOfFame?.careerStatsByRosterId ?? {};
 
-  const managers = Object.entries(careerStatsByUserId).map(([userId, stats]) => {
+  const managers = Object.entries(careerStatsByRosterId).map(([rosterId, stats]) => {
     const gamesPlayed = stats.wins + stats.losses + stats.ties;
     const winPct = gamesPlayed > 0 ? (stats.wins + stats.ties * 0.5) / gamesPlayed : 0;
     return {
-      userId,
-      label: formatUserLabel(userId, userLookup),
+      rosterId,
+      label: formatFranchiseLabel(rosterId, ownerIdByRosterId, userLookup),
       wins: stats.wins,
       losses: stats.losses,
       ties: stats.ties,

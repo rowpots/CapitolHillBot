@@ -44,7 +44,10 @@ async function main() {
   }
 
   const league = await fetchJson(`https://api.sleeper.app/v1/league/${currentLeagueId}`);
-  const users = await fetchJson(`https://api.sleeper.app/v1/league/${currentLeagueId}/users`);
+  const [users, rosters] = await Promise.all([
+    fetchJson(`https://api.sleeper.app/v1/league/${currentLeagueId}/users`),
+    fetchJson(`https://api.sleeper.app/v1/league/${currentLeagueId}/rosters`),
+  ]);
 
   let hallOfFame;
   if (args.fromCache) {
@@ -64,7 +67,7 @@ async function main() {
     });
   }
 
-  const report = buildHallOfFameReport({ league, users, hallOfFame });
+  const report = buildHallOfFameReport({ league, users, rosters, hallOfFame });
 
   if (!report) {
     console.log("No Hall of Fame data to show yet.");

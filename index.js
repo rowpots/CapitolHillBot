@@ -1312,7 +1312,7 @@ async function pollForPlayoffRecap(playoffRecapState) {
           regularSeasonEndWeek: REGULAR_SEASON_END_WEEK,
         });
       }
-      hallOfFameReport = buildHallOfFameReport({ league, users, hallOfFame });
+      hallOfFameReport = buildHallOfFameReport({ league, users, rosters, hallOfFame });
     } catch (error) {
       console.warn("Hall of Fame build failed; will retry next poll.");
       console.warn(error.message);

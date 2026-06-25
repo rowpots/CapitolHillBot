@@ -240,9 +240,16 @@ Steal/Bust to read back at season's end. Unlike `draft-preview.js`'s Round 1 ord
 `traded_picks` cross-reference is needed here: `/v1/draft/{id}/picks` already reflects each pick's
 real draft-time owner. Toggle: `DRAFT_RESULTS_SNAPSHOT_ENABLED`.
 
-**Hall of Fame** (`hall-of-fame.js`) — all-time per-manager career stats (W-L-T, points-for,
-championships, runner-ups, playoff appearances, seasons played), keyed by `user_id` (the one
-identifier stable across seasons) and always rendered under each manager's *current* name.
+**Hall of Fame** (`hall-of-fame.js`) — all-time career stats (W-L-T, points-for, championships,
+runner-ups, playoff appearances, seasons played) tracked per **franchise** (`roster_id`, the team
+slot — verified stable across the `previous_league_id` rollover), and rendered under whichever
+manager owns that slot in the *current* league. This is a dynasty league where the roster slot is
+the entity that persists: when a manager leaves, a new manager inherits the same `roster_id`, so
+keying by the franchise means an orphaned team's history follows the slot to its new owner instead
+of being stranded under a departed manager. The current owner + display name is resolved fresh at
+render time in `buildHallOfFameReport` (roster_id → current `owner_id` → user), so a takeover —
+even a future one — re-attributes the whole history automatically with no re-seed. A franchise
+whose slot no longer exists (league contraction) falls back to a `Team #<rosterId>` label.
 
 - First run ever: `buildHallOfFameFromHistory` walks the `previous_league_id` chain (guard 25,
   same precedent as `buildRecordBookFromHistory`/`buildAllTimeDivisionSeries`), fetching
