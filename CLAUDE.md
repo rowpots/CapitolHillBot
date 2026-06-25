@@ -278,6 +278,40 @@ to the test chat). `npm run preview-hall-of-fame` does a fresh full chain walk b
 but ground-truth); `--from-cache` instantly renders whatever is already in
 `.state/hall-of-fame.json` instead.
 
+## Two-way chat commands (interactive)
+
+`chat-commands.js` + `pollForChatCommands` (index.js, last in the main loop). Members type
+`!command` in the group chat; the bot reads the chat, parses commands, and replies by reusing the
+same builders as its scheduled posts. Commands: `!help`, `!standings`, `!record <team>`, `!hof`
+(registry in `chat-commands.js` COMMANDS — add an entry there *and* a case in both `buildCommandReply`
+in index.js and preview-chat-commands.js).
+
+- **Reading**: `snapbot.readChatMessages(chatId)` scrapes `#cv-<chatId>` (container class `MibAa`),
+  one `li.T1yt2` per sender-block. Sender name comes from `header .nonIntl` and is **carried forward**
+  across a block's header-less continuation messages (Snapchat only labels the first); message text is
+  `span.ogn1z`. System rows ("...DELETED A CHAT", receipts) and date separators are dropped. Border
+  colors are per-member and unreliable for identity — do not key on them. The reader scrolls the
+  conversation to the bottom first so the newest messages load.
+- **Dedupe**: Snapchat exposes no message ids and messages are *ephemeral* (auto-clear ~24h), so the
+  signature is `sender::normalized-text` (`commandSignature`). On first run the poller **primes** —
+  seeds all currently-visible commands as handled without replying (like pollForTrades seeding existing
+  trades) — so it never answers a backlog on startup. Handled signatures are a 200-entry ring in
+  `.state/chat-commands-state.json`. Trade-off: the exact same command from the same person is answered
+  once until its signature ages out.
+- **Robustness**: reads go through `readChatMessagesWithRetry` (reopen messaging home + retry on the
+  intermittent "Could not find chat", mirroring `sendMessageWithRetry`). The bot's own posts come back
+  as sender "Me" and are ignored. Unknown commands stay silent (no nagging on stray "!"). A read failure
+  warns and is retried next cycle — it never breaks the main loop.
+- **Standings source**: `buildStandingsFromRosters` reads each roster's Sleeper `settings`
+  (wins/losses/ties/fpts) — one `/rosters` fetch, works year-round. Offseason fallback
+  (`resolveStandings`): if the current season has zero games played, it shows the previous season's
+  final standings labeled `(<year> final)`.
+- Config: `CHAT_COMMANDS_ENABLED` (default true), `CHAT_COMMAND_PREFIX` (default `!`),
+  `CHAT_COMMANDS_CHAT_ID` (defaults to the main group; point at the test chat while verifying).
+- Preview/test: `npm run preview-chat-commands` reads the test chat and prints the replies it *would*
+  send (no priming/dedupe — answers whatever commands are present); add `--send` to actually reply,
+  `--main` / `--chat-id <id>` to target a different chat.
+
 ## Milestone alerts (playoff clinch/elimination + all-time record book)
 
 Event-driven, in `milestones.js`. Detected once when a week's results are final (called from

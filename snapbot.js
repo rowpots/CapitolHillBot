@@ -910,6 +910,66 @@ export default class SnapBot {
     }, userId);
   }
 
+  // Reads a conversation's messages as [{ from, text }] in chronological order,
+  // for the two-way chat-command feature. Improves on extractChatData in three
+  // ways needed for command parsing: (1) it scrolls the conversation to the
+  // bottom first so the newest messages are loaded; (2) it carries the sender
+  // name forward across a run of messages from one person (Snapchat only renders
+  // the name header on the *first* message of a consecutive block, leaving the
+  // rest header-less); (3) it drops Snapchat's system rows ("...DELETED A CHAT",
+  // delivery receipts) and date separators. Sender identity comes from the
+  // `header .nonIntl` label, not border colors (which vary per member).
+  async readChatMessages(chatId, { open = true } = {}) {
+    const normalizedChatId = this.normalizeChatId(chatId);
+
+    if (open) {
+      const titleSpan = await this.findRecipientTitleSpan(chatId);
+      if (!titleSpan) {
+        throw new Error(`Could not find chat ${chatId} in the Snapchat chat list.`);
+      }
+      await titleSpan.click();
+      await delay(1500);
+    }
+
+    await this.page.evaluate((id) => {
+      const cv = document.querySelector(`#cv-${id}`);
+      if (cv) cv.scrollTop = cv.scrollHeight;
+    }, normalizedChatId);
+    await delay(1200);
+
+    return this.page.evaluate((id) => {
+      const cv = document.querySelector(`#cv-${id}`);
+      if (!cv) return [];
+
+      const SYSTEM = /DELETED A (CHAT|SNAP)|^DELIVERED$|^RECEIVED$|^OPENED$|SCREENSHOT/i;
+      const out = [];
+      let currentSender = null;
+
+      // Each direct `li.T1yt2` child is either a date separator or a block of
+      // consecutive messages from one sender (with that sender's name in a
+      // `header .nonIntl` only on the block's first message).
+      const groups = cv.querySelectorAll(":scope > li.T1yt2");
+      groups.forEach((group) => {
+        const headerName = group.querySelector("header .nonIntl")?.textContent?.trim();
+        if (headerName) {
+          currentSender = headerName;
+        }
+
+        const texts = Array.from(group.querySelectorAll("span.ogn1z"))
+          .filter((span) => !span.closest("header"))
+          .map((span) => span.textContent.trim())
+          .filter(Boolean);
+
+        for (const text of texts) {
+          if (SYSTEM.test(text)) continue;
+          out.push({ from: currentSender || "Unknown", text });
+        }
+      });
+
+      return out;
+    }, normalizedChatId);
+  }
+
   async userStatus() {
     await this.waitForChatList();
     const lists = await this.page.$$("div[role='listitem']");

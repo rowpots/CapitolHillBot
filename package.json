@@ -18,7 +18,8 @@
     "preview-playoff-weekly-report": "node preview-playoff-weekly-report.js",
     "preview-trade-card": "node preview-trade-card.js",
     "preview-awards": "node preview-awards.js",
-    "preview-hall-of-fame": "node preview-hall-of-fame.js"
+    "preview-hall-of-fame": "node preview-hall-of-fame.js",
+    "preview-chat-commands": "node preview-chat-commands.js"
   },
   "author": "Roger Rodrigues",
   "dependencies": {

@@ -55,6 +55,14 @@ import {
   isBracketTrustworthy,
   isWeekScored,
 } from "./playoffs.js";
+import {
+  buildHelpMessage,
+  buildStandingsFromRosters,
+  buildTeamRecordMessage,
+  commandSignature,
+  formatStandingsMessage,
+  parseCommand,
+} from "./chat-commands.js";
 
 dotenv.config();
 installTimestampedConsole();
@@ -90,6 +98,7 @@ const DRAFT_RESULTS_STATE_FILE = path.join(
   "draft-results-state.json"
 );
 const HALL_OF_FAME_FILE = path.join(STATE_DIR, "hall-of-fame.json");
+const CHAT_COMMANDS_STATE_FILE = path.join(STATE_DIR, "chat-commands-state.json");
 const PLAYOFF_BRACKET_STATE_FILE = path.join(
   STATE_DIR,
   "playoff-bracket-state.json"
@@ -208,6 +217,11 @@ const config = {
     Math.min(59, parseInteger(process.env.PLAYOFF_WEEKLY_REPORT_SEND_MINUTE_ET, 45))
   ),
   playoffRecapEnabled: parseBoolean(process.env.PLAYOFF_RECAP_ENABLED, true),
+  chatCommandsEnabled: parseBoolean(process.env.CHAT_COMMANDS_ENABLED, true),
+  chatCommandPrefix: process.env.CHAT_COMMAND_PREFIX?.trim() || "!",
+  // Which chat the command listener reads + replies in. Defaults to the main
+  // group; point it at the test chat via env while verifying.
+  chatCommandsChatId: process.env.CHAT_COMMANDS_CHAT_ID?.trim() ?? "",
 };
 
 const bot = new SnapBot();
@@ -247,6 +261,7 @@ async function main() {
   const playoffBracketState = await loadPlayoffBracketState();
   const playoffWeeklyState = await loadPlayoffWeeklyState();
   const playoffRecapState = await loadPlayoffRecapState();
+  const chatCommandsState = await loadChatCommandsState();
 
   if (!config.dryRun) {
     await startSnapchatSession();
@@ -288,6 +303,7 @@ async function main() {
       await pollForDraftPreview(draftPreviewState);
       await pollForDraftResultsSnapshot(draftResultsState);
       await pollForTrades(state);
+      await pollForChatCommands(chatCommandsState);
     } catch (error) {
       console.error("Polling cycle failed, but the bot will keep running.");
       console.error(error);
@@ -1515,6 +1531,200 @@ async function pollForDraftResultsSnapshot(draftResultsState) {
   console.log(
     `Captured draft results snapshot for draft ${draftId} (${snapshot.picks.length} picks).`
   );
+}
+
+// Two-way chat commands. Reads the configured chat, parses any `!command`
+// messages from members, and replies by reusing the bot's existing builders.
+async function pollForChatCommands(chatCommandsState) {
+  if (!config.chatCommandsEnabled || config.dryRun) {
+    return;
+  }
+
+  const chatId = config.chatCommandsChatId || config.snapchatGroupChatId;
+  if (!chatId) {
+    return;
+  }
+
+  let messages;
+  try {
+    messages = await readChatMessagesWithRetry(chatId);
+  } catch (error) {
+    console.warn("Chat command read failed; will retry next cycle.");
+    console.warn(error.message);
+    return;
+  }
+
+  const commands = [];
+  for (const message of messages) {
+    // The bot's own posts come back as sender "Me"; never treat them as input.
+    if (String(message.from).trim().toLowerCase() === "me") {
+      continue;
+    }
+    const parsed = parseCommand(message.text, config.chatCommandPrefix);
+    if (parsed) {
+      commands.push({ message, parsed, signature: commandSignature(message) });
+    }
+  }
+
+  const handled = new Set(chatCommandsState.handledSignatures);
+
+  // First run ever: seed every command currently visible as already-handled so
+  // the bot doesn't reply to a backlog of old messages on startup. Mirrors how
+  // pollForTrades seeds existing trades. Only fresh commands after this count.
+  if (!chatCommandsState.primed) {
+    for (const command of commands) {
+      handled.add(command.signature);
+    }
+    chatCommandsState.primed = true;
+    chatCommandsState.handledSignatures = Array.from(handled).slice(-200);
+    await saveChatCommandsState(chatCommandsState);
+    console.log(
+      `Chat commands primed with ${commands.length} existing message(s); awaiting new commands.`
+    );
+    return;
+  }
+
+  const fresh = commands.filter((command) => !handled.has(command.signature));
+  if (fresh.length === 0) {
+    return;
+  }
+
+  for (const command of fresh) {
+    try {
+      const reply = await buildCommandReply(command.parsed);
+      if (reply) {
+        await sendChatMessage(
+          reply,
+          `chat command "${config.chatCommandPrefix}${command.parsed.name}" from ${command.message.from}`,
+          { chatId }
+        );
+      }
+    } catch (error) {
+      console.warn(`Chat command "${command.parsed.name}" failed.`);
+      console.warn(error.message);
+    }
+    // Mark handled regardless of reply outcome so a failing command isn't
+    // retried in a loop every cycle.
+    handled.add(command.signature);
+  }
+
+  chatCommandsState.handledSignatures = Array.from(handled).slice(-200);
+  await saveChatCommandsState(chatCommandsState);
+}
+
+// Reading the chat depends on the target chat's row being rendered in the list,
+// which can lag right after the page (re)loads -- the same intermittent "Could
+// not find chat" the send path already retries around (sendMessageWithRetry).
+// Reopen the messaging home and retry a few times before giving up for this
+// cycle.
+async function readChatMessagesWithRetry(chatId, attempts = 3) {
+  let lastError = null;
+  for (let attempt = 1; attempt <= attempts; attempt += 1) {
+    try {
+      await ensureSnapchatSessionReady();
+      await bot.openMessagingHome();
+      return await bot.readChatMessages(chatId);
+    } catch (error) {
+      lastError = error;
+      if (!/Could not find chat/.test(String(error?.message ?? ""))) {
+        throw error;
+      }
+      if (attempt < attempts) {
+        console.warn(`Chat not ready for read (attempt ${attempt}/${attempts}); retrying.`);
+        await new Promise((resolve) => setTimeout(resolve, 4000));
+      }
+    }
+  }
+  throw lastError;
+}
+
+// Routes one parsed command to a reply string (or null to stay silent, e.g. for
+// unknown commands so the bot doesn't nag on every stray "!" message). Fetches
+// only the league data each command needs.
+async function buildCommandReply(parsed) {
+  const league = await fetchJson(
+    `https://api.sleeper.app/v1/league/${config.sleeperLeagueId}`
+  );
+  const leagueName = String(league?.name ?? "League").trim() || "League";
+
+  switch (parsed.name) {
+    case "help":
+      return buildHelpMessage(config.chatCommandPrefix, leagueName);
+
+    case "standings": {
+      const { teams, seasonNote } = await resolveStandings(league);
+      return formatStandingsMessage({ leagueName, teams, seasonNote });
+    }
+
+    case "record": {
+      const { teams, seasonNote } = await resolveStandings(league);
+      return buildTeamRecordMessage({
+        leagueName,
+        teams,
+        query: parsed.argString,
+        prefix: config.chatCommandPrefix,
+        seasonNote,
+      });
+    }
+
+    case "hof": {
+      const hallOfFame = await loadHallOfFameState();
+      if (!hallOfFame?.seededFromHistory) {
+        return "The Hall of Fame isn't available yet — it's built at the end of the season.";
+      }
+      const [users, rosters] = await Promise.all([
+        fetchJson(`https://api.sleeper.app/v1/league/${config.sleeperLeagueId}/users`),
+        fetchJson(`https://api.sleeper.app/v1/league/${config.sleeperLeagueId}/rosters`),
+      ]);
+      const report = buildHallOfFameReport({ league, users, rosters, hallOfFame });
+      return report?.textMessage ?? "No Hall of Fame data yet.";
+    }
+
+    default:
+      // Unknown command -- stay silent rather than reacting to every stray "!".
+      return null;
+  }
+}
+
+// Standings from the current league's roster settings, with an offseason
+// fallback: if the current season hasn't been played yet (every team 0 games),
+// show the previous season's final standings instead, labeled as such -- so the
+// command stays useful year-round rather than returning a wall of 0-0.
+async function resolveStandings(league) {
+  const [rosters, users] = await Promise.all([
+    fetchJson(`https://api.sleeper.app/v1/league/${config.sleeperLeagueId}/rosters`),
+    fetchJson(`https://api.sleeper.app/v1/league/${config.sleeperLeagueId}/users`),
+  ]);
+  const teams = buildStandingsFromRosters({ rosters, users });
+
+  if (teams.some((team) => team.gamesPlayed > 0)) {
+    return { teams, seasonNote: null };
+  }
+
+  const previousLeagueId = String(league?.previous_league_id ?? "").trim();
+  if (!previousLeagueId || previousLeagueId === "0") {
+    return { teams, seasonNote: null };
+  }
+
+  try {
+    const previousLeague = await fetchJson(
+      `https://api.sleeper.app/v1/league/${previousLeagueId}`
+    );
+    const [prevRosters, prevUsers] = await Promise.all([
+      fetchJson(`https://api.sleeper.app/v1/league/${previousLeagueId}/rosters`),
+      fetchJson(`https://api.sleeper.app/v1/league/${previousLeagueId}/users`),
+    ]);
+    const prevTeams = buildStandingsFromRosters({ rosters: prevRosters, users: prevUsers });
+    if (prevTeams.some((team) => team.gamesPlayed > 0)) {
+      const season = String(previousLeague?.season ?? "").trim();
+      return { teams: prevTeams, seasonNote: season ? `${season} final` : "last season" };
+    }
+  } catch (error) {
+    console.warn("Standings offseason fallback failed; showing current (empty) standings.");
+    console.warn(error.message);
+  }
+
+  return { teams, seasonNote: null };
 }
 
 async function refreshMilestones({
@@ -2801,6 +3011,45 @@ async function savePlayoffRecapState(state) {
 
   await fs.writeFile(
     PLAYOFF_RECAP_STATE_FILE,
+    JSON.stringify(serialized, null, 2),
+    "utf8"
+  );
+}
+
+async function loadChatCommandsState() {
+  await fs.mkdir(STATE_DIR, { recursive: true });
+
+  try {
+    const fileContents = await fs.readFile(CHAT_COMMANDS_STATE_FILE, "utf8");
+    const parsed = parseJsonFile(fileContents);
+
+    return {
+      primed: Boolean(parsed?.primed),
+      handledSignatures: Array.isArray(parsed?.handledSignatures)
+        ? parsed.handledSignatures
+        : [],
+    };
+  } catch (error) {
+    return {
+      primed: false,
+      handledSignatures: [],
+    };
+  }
+}
+
+async function saveChatCommandsState(state) {
+  await fs.mkdir(STATE_DIR, { recursive: true });
+
+  const serialized = {
+    updatedAt: new Date().toISOString(),
+    primed: Boolean(state.primed),
+    // Keep only the most recent signatures -- old ephemeral messages are gone
+    // from Snapchat, so their dedupe entries are dead weight.
+    handledSignatures: (state.handledSignatures ?? []).slice(-200),
+  };
+
+  await fs.writeFile(
+    CHAT_COMMANDS_STATE_FILE,
     JSON.stringify(serialized, null, 2),
     "utf8"
   );

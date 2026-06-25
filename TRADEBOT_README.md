@@ -87,6 +87,9 @@ These are the important ones:
 - `DRAFT_RESULTS_SNAPSHOT_ENABLED`: one-time post-draft pick snapshot (feeds Draft Steal/Bust), `true` or `false`, default `true`
 - `AWARDS_CEREMONY_ENABLED`: season awards ceremony, `true` or `false`, default `true`
 - `HALL_OF_FAME_ENABLED`: all-time career leaderboard, `true` or `false`, default `true`
+- `CHAT_COMMANDS_ENABLED`: two-way `!commands` members can type in the chat, `true` or `false`, default `true`
+- `CHAT_COMMAND_PREFIX`: the character that starts a command, default `!`
+- `CHAT_COMMANDS_CHAT_ID`: which chat to listen + reply in; blank = the main group chat
 - `HEADLESS`: `false` is easier for debugging
 - `DRY_RUN`: `true` logs instead of sending to Snapchat
 - `RUN_ONCE`: `true` checks once and exits
@@ -619,9 +622,10 @@ from then on:
 ...
 ```
 
-Career stats are keyed by Sleeper's `user_id` (the one identifier stable across seasons) and
-always rendered under each manager's *current* team/display name, even for stats earned under an
-old name. Toggle with `HALL_OF_FAME_ENABLED`.
+Career stats are tracked per **team franchise** (the roster slot, which persists across seasons)
+and rendered under whoever owns that slot in the current league — so when a manager leaves and a
+new one takes over their team, the team's full history follows the slot to its new owner instead of
+being orphaned under the departed manager. Toggle with `HALL_OF_FAME_ENABLED`.
 
 Preview the Awards Ceremony (no Snapchat, replays a finished season):
 
@@ -638,6 +642,31 @@ npm run preview-hall-of-fame
 
 Add `--from-cache` to instantly render whatever is already in `.state/hall-of-fame.json` instead
 of re-walking history, and `--send` to push it to the test chat.
+
+## Two-Way Chat Commands
+
+League members can type commands right in the group chat and the bot replies. Commands start with
+`!` (configurable via `CHAT_COMMAND_PREFIX`):
+
+- `!help` — list the available commands
+- `!standings` — current league standings (in the offseason, shows last season's final standings)
+- `!record <team>` — a team's record, points, and rank (e.g. `!record JoshPT`)
+- `!hof` — the all-time Hall of Fame
+
+The bot listens in the main group chat by default; set `CHAT_COMMANDS_CHAT_ID` to listen elsewhere.
+On startup it ignores any commands already sitting in the chat (so it won't reply to old messages),
+then answers new ones each poll. Snapchat messages are ephemeral, so a command needs to still be
+visible when the bot next checks — it isn't a guaranteed-delivery inbox. Disable the whole feature
+with `CHAT_COMMANDS_ENABLED=false`.
+
+Test it against the test chat (type a few commands there first):
+
+```bash
+npm run preview-chat-commands
+```
+
+That prints the replies it *would* send; add `--send` to actually reply in the chat, or
+`--chat-id <id>` / `--main` to target a different chat.
 
 ## Trade Message Format
 
