@@ -102,7 +102,7 @@ function getRoundTwoEntries(winnersBracket) {
     .sort((a, b) => Number(a.m) - Number(b.m));
 }
 
-function findPlacementEntry(winnersBracket, placement) {
+export function findPlacementEntry(winnersBracket, placement) {
   return (winnersBracket ?? []).find((entry) => Number(entry.p) === placement);
 }
 

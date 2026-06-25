@@ -39,6 +39,14 @@ import {
   buildDraftPreviewReport,
   isWithinDraftPreviewWindow,
 } from "./draft-preview.js";
+import { buildDraftResultsSnapshot, isDraftComplete } from "./draft-results.js";
+import { buildAwardsCeremonyReport } from "./awards.js";
+import {
+  buildHallOfFameFromHistory,
+  buildHallOfFameReport,
+  createEmptyHallOfFame,
+  mergeSeasonIntoHallOfFame,
+} from "./hall-of-fame.js";
 import {
   buildChampionshipRecap,
   buildPlayoffBracketReveal,
@@ -77,6 +85,11 @@ const DRAFT_PREVIEW_STATE_FILE = path.join(
   STATE_DIR,
   "draft-preview-state.json"
 );
+const DRAFT_RESULTS_STATE_FILE = path.join(
+  STATE_DIR,
+  "draft-results-state.json"
+);
+const HALL_OF_FAME_FILE = path.join(STATE_DIR, "hall-of-fame.json");
 const PLAYOFF_BRACKET_STATE_FILE = path.join(
   STATE_DIR,
   "playoff-bracket-state.json"
@@ -172,6 +185,12 @@ const config = {
     1,
     parseInteger(process.env.DRAFT_PREVIEW_LEAD_HOURS, 48)
   ),
+  draftResultsSnapshotEnabled: parseBoolean(
+    process.env.DRAFT_RESULTS_SNAPSHOT_ENABLED,
+    true
+  ),
+  awardsCeremonyEnabled: parseBoolean(process.env.AWARDS_CEREMONY_ENABLED, true),
+  hallOfFameEnabled: parseBoolean(process.env.HALL_OF_FAME_ENABLED, true),
   playoffBracketRevealEnabled: parseBoolean(
     process.env.PLAYOFF_BRACKET_REVEAL_ENABLED,
     true
@@ -224,6 +243,7 @@ async function main() {
   const divisionRivalryState = await loadDivisionRivalryState();
   const bigMatchupsState = await loadBigMatchupsState();
   const draftPreviewState = await loadDraftPreviewState();
+  const draftResultsState = await loadDraftResultsState();
   const playoffBracketState = await loadPlayoffBracketState();
   const playoffWeeklyState = await loadPlayoffWeeklyState();
   const playoffRecapState = await loadPlayoffRecapState();
@@ -266,6 +286,7 @@ async function main() {
       await pollForPlayoffWeeklyReport(playoffWeeklyState);
       await pollForPlayoffRecap(playoffRecapState);
       await pollForDraftPreview(draftPreviewState);
+      await pollForDraftResultsSnapshot(draftResultsState);
       await pollForTrades(state);
     } catch (error) {
       console.error("Polling cycle failed, but the bot will keep running.");
@@ -399,18 +420,17 @@ async function pollForTrades(state) {
   );
 
   const trades = await fetchCompleteTrades();
+
+  if (trades.length === 0) {
+    console.log("No completed trades found.");
+    return;
+  }
+
   const newTrades = trades.filter(
     (trade) =>
       !state.sentTransactionIds.has(String(trade.transaction_id)) &&
       !hasQueuedTradeNotification(state, String(trade.transaction_id))
   );
-
-  if (newTrades.length === 0) {
-    console.log("No new completed trades found.");
-    return;
-  }
-
-  console.log(`Found ${newTrades.length} new completed trade(s).`);
 
   const [league, rosters, users, playersById] = await Promise.all([
     fetchJson(`https://api.sleeper.app/v1/league/${config.sleeperLeagueId}`),
@@ -436,19 +456,36 @@ async function pollForTrades(state) {
   const userLookup = buildUserLookup(users);
   const totalRosters = Number(league?.total_rosters) || rosterLookup.size || 12;
 
-  await saveTradeHistoryLog(trades, rosterLookup, userLookup);
+  const analysisByTransactionId = buildTradeAnalysisByTransactionId(trades, {
+    league,
+    playersById,
+    rosterLookup,
+    userLookup,
+    valueBook,
+    totalRosters,
+  });
+
+  await saveTradeHistoryLog(trades, rosterLookup, userLookup, {
+    league,
+    analysisByTransactionId,
+  });
+
+  if (newTrades.length === 0) {
+    console.log("No new completed trades found.");
+    return;
+  }
+
+  console.log(`Found ${newTrades.length} new completed trade(s).`);
 
   for (const trade of newTrades) {
     try {
-      const analysis = buildTradeAnalysis(trade, {
-        allTrades: trades,
-        league,
-        playersById,
-        rosterLookup,
-        userLookup,
-        valueBook,
-        totalRosters,
-      });
+      const analysis = analysisByTransactionId.get(String(trade.transaction_id));
+      if (!analysis) {
+        console.warn(
+          `Trade ${trade.transaction_id} has no analysis available this cycle; will retry next poll.`
+        );
+        continue;
+      }
 
       const releaseAtTimestampMs = resolveTradeNotificationReleaseAtTimestampMs(
         trade
@@ -1224,10 +1261,75 @@ async function pollForPlayoffRecap(playoffRecapState) {
     return;
   }
 
+  // Built up front (before the dry-run check) so a dry run can preview both
+  // season-end extras alongside the existing recap pair. Neither failure
+  // blocks the recap itself -- each is independently best-effort.
+  let awardsCeremonyReport = null;
+  if (config.awardsCeremonyEnabled) {
+    try {
+      const [tradeHistoryEntries, draftResultsState, playersById] = await Promise.all([
+        loadTradeHistoryEntriesForSeason(season),
+        loadDraftResultsState(),
+        loadPlayersById(),
+      ]);
+      const draftResultsSnapshot = findDraftResultsSnapshotForSeason(draftResultsState, season);
+      awardsCeremonyReport = buildAwardsCeremonyReport({
+        league,
+        rosters,
+        users,
+        matchupsByWeek: regularSeasonMatchupsByWeek,
+        regularSeasonEndWeek: REGULAR_SEASON_END_WEEK,
+        fullSeasonMatchupsByWeek: allMatchupsByWeek,
+        lastWeek: lastPlayoffWeek,
+        tradeHistoryEntries,
+        draftResultsSnapshot,
+        playersById,
+      });
+    } catch (error) {
+      console.warn("Awards ceremony build failed; will retry next poll.");
+      console.warn(error.message);
+    }
+  }
+
+  let hallOfFame = null;
+  let hallOfFameReport = null;
+  if (config.hallOfFameEnabled) {
+    try {
+      hallOfFame = await loadHallOfFameState();
+      if (!hallOfFame.seededFromHistory) {
+        hallOfFame = await buildHallOfFameFromHistory({
+          league,
+          fetchJson,
+          regularSeasonEndWeek: REGULAR_SEASON_END_WEEK,
+          logger: console,
+        });
+      } else {
+        mergeSeasonIntoHallOfFame(hallOfFame, {
+          season,
+          rosters,
+          matchupsByWeek: regularSeasonMatchupsByWeek,
+          winnersBracket,
+          regularSeasonEndWeek: REGULAR_SEASON_END_WEEK,
+        });
+      }
+      hallOfFameReport = buildHallOfFameReport({ league, users, hallOfFame });
+    } catch (error) {
+      console.warn("Hall of Fame build failed; will retry next poll.");
+      console.warn(error.message);
+      hallOfFame = null;
+    }
+  }
+
   if (config.dryRun) {
     console.log(`[Dry Run] ${championshipRecap.textMessage}`);
     if (seasonRecap) {
       console.log(`[Dry Run] ${seasonRecap.textMessage}`);
+    }
+    if (awardsCeremonyReport) {
+      console.log(`[Dry Run] ${awardsCeremonyReport.textMessage}`);
+    }
+    if (hallOfFameReport) {
+      console.log(`[Dry Run] ${hallOfFameReport.textMessage}`);
     }
     return;
   }
@@ -1242,6 +1344,39 @@ async function pollForPlayoffRecap(playoffRecapState) {
       await sendChatMessage(seasonRecap.textMessage, "season recap");
     } catch (error) {
       console.warn("Season recap send failed.");
+      console.warn(error.message);
+    }
+  }
+
+  // Hall of Fame's merge must be persisted *before* its send is attempted --
+  // mergeSeasonIntoHallOfFame's lastMergedSeason guard only prevents
+  // double-counting this season on a retry if the merge actually made it to
+  // disk. A save failure here skips the send for this cycle; the un-advanced
+  // state naturally retries the whole Hall of Fame step next poll.
+  if (hallOfFame) {
+    try {
+      await saveHallOfFameState(hallOfFame);
+    } catch (error) {
+      console.warn("Hall of Fame state save failed; will retry next poll.");
+      console.warn(error.message);
+      hallOfFameReport = null;
+    }
+  }
+
+  if (awardsCeremonyReport) {
+    try {
+      await sendChatMessage(awardsCeremonyReport.textMessage, "awards ceremony");
+    } catch (error) {
+      console.warn("Awards ceremony send failed.");
+      console.warn(error.message);
+    }
+  }
+
+  if (hallOfFameReport) {
+    try {
+      await sendChatMessage(hallOfFameReport.textMessage, "hall of fame");
+    } catch (error) {
+      console.warn("Hall of Fame send failed.");
       console.warn(error.message);
     }
   }
@@ -1331,6 +1466,55 @@ async function pollForDraftPreview(draftPreviewState) {
     leagueId: config.sleeperLeagueId,
   });
   await saveDraftPreviewState(draftPreviewState);
+}
+
+// Mirrors pollForDraftPreview's shape but captures the *results* of a
+// finished draft instead of previewing an upcoming one. This never sends a
+// chat message — it only persists data for awards.js (Draft Steal/Bust)
+// to read back at season's end.
+async function pollForDraftResultsSnapshot(draftResultsState) {
+  if (!config.draftResultsSnapshotEnabled) {
+    return;
+  }
+
+  const league = await fetchJson(
+    `https://api.sleeper.app/v1/league/${config.sleeperLeagueId}`
+  );
+  const draftId = String(league?.draft_id ?? "").trim();
+  if (!draftId) {
+    return;
+  }
+
+  if (hasDraftResultsSnapshot(draftResultsState, draftId)) {
+    return;
+  }
+
+  const draft = await fetchJson(`https://api.sleeper.app/v1/draft/${draftId}`);
+  if (!isDraftComplete(draft)) {
+    return;
+  }
+
+  const [picks, rosters, users, playersById] = await Promise.all([
+    fetchJson(`https://api.sleeper.app/v1/draft/${draftId}/picks`),
+    fetchJson(`https://api.sleeper.app/v1/league/${config.sleeperLeagueId}/rosters`),
+    fetchJson(`https://api.sleeper.app/v1/league/${config.sleeperLeagueId}/users`),
+    loadPlayersById(),
+  ]);
+
+  const snapshot = buildDraftResultsSnapshot({
+    league,
+    draft,
+    picks,
+    rosters,
+    users,
+    playersById,
+  });
+
+  markDraftResultsSnapshot(draftResultsState, draftId, snapshot);
+  await saveDraftResultsState(draftResultsState);
+  console.log(
+    `Captured draft results snapshot for draft ${draftId} (${snapshot.picks.length} picks).`
+  );
 }
 
 async function refreshMilestones({
@@ -1747,6 +1931,30 @@ async function fetchCompleteTrades() {
   });
 
   return uniqueTrades;
+}
+
+// Graded for every trade (not just newly-discovered ones) so the persisted
+// trade-history log always carries up-to-date grades for awards/recap use,
+// not just whatever was in scope at notification time. A trade that fails to
+// grade this cycle (e.g. valueBook unavailable) is simply absent from the map
+// and self-heals next poll, since saveTradeHistoryLog rebuilds from scratch
+// every cycle against the same full trade list.
+function buildTradeAnalysisByTransactionId(trades, options) {
+  const analysisByTransactionId = new Map();
+
+  for (const trade of trades) {
+    try {
+      analysisByTransactionId.set(
+        String(trade.transaction_id),
+        buildTradeAnalysis(trade, { ...options, allTrades: trades })
+      );
+    } catch (error) {
+      console.warn(`Unable to grade trade ${trade.transaction_id} this cycle.`);
+      console.warn(error.message);
+    }
+  }
+
+  return analysisByTransactionId;
 }
 
 function buildTradeAnalysis(
@@ -2169,8 +2377,15 @@ function buildTradeHistoryContext(allTrades, currentTrade, rosterLookup, userLoo
   };
 }
 
-async function saveTradeHistoryLog(trades, rosterLookup, userLookup) {
+async function saveTradeHistoryLog(
+  trades,
+  rosterLookup,
+  userLookup,
+  { league, analysisByTransactionId } = {}
+) {
   await fs.mkdir(STATE_DIR, { recursive: true });
+
+  const season = String(league?.season ?? "").trim() || null;
 
   const entries = trades.map((trade) => {
     const rosterIds = getTradeRosterIds(trade);
@@ -2180,10 +2395,21 @@ async function saveTradeHistoryLog(trades, rosterLookup, userLookup) {
       rosterLookup,
       userLookup
     );
+    const analysis = analysisByTransactionId?.get(String(trade.transaction_id));
+    const grades = (analysis?.teams ?? []).map((team) => ({
+      rosterId: team.rosterId,
+      label: team.label,
+      netValue: team.netValue,
+      grade: team.grade,
+      gradeFlavor: team.gradeFlavor,
+      gradeScore: team.gradeScore,
+      isWinner: team.isWinner,
+    }));
 
     return {
       transactionId: String(trade.transaction_id),
       acceptedAt: formatTimestamp(trade.status_updated ?? trade.created),
+      season,
       seasonTradeNumber: historyContext.seasonTradeNumber,
       rivalryTradeNumber: historyContext.rivalryTradeNumber,
       rivalryLabel: historyContext.rivalryLabel,
@@ -2191,6 +2417,7 @@ async function saveTradeHistoryLog(trades, rosterLookup, userLookup) {
       teams: rosterIds.map((rosterId) =>
         formatRosterLabel(rosterId, rosterLookup, userLookup)
       ),
+      grades,
     };
   });
 
@@ -2205,6 +2432,17 @@ async function saveTradeHistoryLog(trades, rosterLookup, userLookup) {
     JSON.stringify(serialized, null, 2),
     "utf8"
   );
+}
+
+async function loadTradeHistoryEntriesForSeason(season) {
+  try {
+    const fileContents = await fs.readFile(TRADE_HISTORY_FILE, "utf8");
+    const parsed = parseJsonFile(fileContents);
+    const entries = Array.isArray(parsed?.trades) ? parsed.trades : [];
+    return entries.filter((entry) => String(entry?.season ?? "") === String(season));
+  } catch (error) {
+    return [];
+  }
 }
 
 function getTradeRosterIds(trade) {
@@ -2615,6 +2853,58 @@ function markDraftPreviewSent(state, { draftId, leagueId }) {
   };
 }
 
+async function loadDraftResultsState() {
+  await fs.mkdir(STATE_DIR, { recursive: true });
+
+  try {
+    const fileContents = await fs.readFile(DRAFT_RESULTS_STATE_FILE, "utf8");
+    const parsed = parseJsonFile(fileContents);
+
+    return {
+      snapshotsByDraftId: parsed?.snapshotsByDraftId ?? {},
+    };
+  } catch (error) {
+    return {
+      snapshotsByDraftId: {},
+    };
+  }
+}
+
+async function saveDraftResultsState(state) {
+  await fs.mkdir(STATE_DIR, { recursive: true });
+
+  const serialized = {
+    updatedAt: new Date().toISOString(),
+    snapshotsByDraftId: state.snapshotsByDraftId ?? {},
+  };
+
+  await fs.writeFile(
+    DRAFT_RESULTS_STATE_FILE,
+    JSON.stringify(serialized, null, 2),
+    "utf8"
+  );
+}
+
+function hasDraftResultsSnapshot(state, draftId) {
+  return Boolean(state?.snapshotsByDraftId?.[draftId]);
+}
+
+function markDraftResultsSnapshot(state, draftId, snapshot) {
+  if (!state.snapshotsByDraftId) {
+    state.snapshotsByDraftId = {};
+  }
+
+  state.snapshotsByDraftId[draftId] = snapshot;
+}
+
+function findDraftResultsSnapshotForSeason(draftResultsState, season) {
+  const snapshots = Object.values(draftResultsState?.snapshotsByDraftId ?? {});
+  return (
+    snapshots.find((snapshot) => String(snapshot?.season ?? "") === String(season)) ??
+    null
+  );
+}
+
 async function loadPowerRankingsState() {
   await fs.mkdir(STATE_DIR, { recursive: true });
 
@@ -2710,6 +3000,23 @@ async function loadRecordBook() {
 async function saveRecordBook(book) {
   await fs.mkdir(STATE_DIR, { recursive: true });
   await fs.writeFile(RECORD_BOOK_FILE, JSON.stringify(book, null, 2), "utf8");
+}
+
+async function loadHallOfFameState() {
+  await fs.mkdir(STATE_DIR, { recursive: true });
+
+  try {
+    const fileContents = await fs.readFile(HALL_OF_FAME_FILE, "utf8");
+    const parsed = parseJsonFile(fileContents);
+    return { ...createEmptyHallOfFame(), ...parsed };
+  } catch (error) {
+    return createEmptyHallOfFame();
+  }
+}
+
+async function saveHallOfFameState(hallOfFame) {
+  await fs.mkdir(STATE_DIR, { recursive: true });
+  await fs.writeFile(HALL_OF_FAME_FILE, JSON.stringify(hallOfFame, null, 2), "utf8");
 }
 
 function hasSentWeeklyReport(state, season, week) {

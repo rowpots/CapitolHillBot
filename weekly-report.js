@@ -832,7 +832,7 @@ function formatMovement(movement) {
   return movement > 0 ? `↑${movement}` : `↓${Math.abs(movement)}`;
 }
 
-function computeAllPlayWinPct(matchupsByWeek, throughWeek) {
+export function computeAllPlayWinPct(matchupsByWeek, throughWeek) {
   const allPlayWins = new Map();
   const allPlayGames = new Map();
 

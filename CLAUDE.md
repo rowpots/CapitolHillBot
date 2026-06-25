@@ -199,6 +199,78 @@ values back to the genuinely-undecided shape before building, so replaying a *fi
 still shows the real placeholder text a league would have actually seen, not a result-spoiled
 version of it.
 
+## Season awards ceremony + Hall of Fame (season-end, one-time)
+
+Two more messages appended to the existing `pollForPlayoffRecap` flow (same Tuesday-after-Week-17
+send, not a new cadence) — Awards Ceremony first, then Hall of Fame, both best-effort so a failure
+in either doesn't block the championship/season recap that already sent.
+
+**Awards Ceremony** (`awards.js`) — 8 manager-level season-arc awards, each line *omitted* (not
+null) when its inputs are missing for that season:
+
+- 🚀 Most Improved / 📉 Biggest Collapse — largest win% delta, first half (wks 1-7) vs. second half
+  (wks 8-14) of the regular season, guarded by a `MIN_GAMES_FOR_AWARD = 4` minimum per half so a
+  short split doesn't produce a nonsensical signal (mirrors milestones.js's `MIN_STREAK_RECORD`).
+- 🍀 Luckiest / 💀 Unluckiest Manager — largest gap between actual win% and all-play win%
+  (`computeAllPlayWinPct`, exported from `weekly-report.js` for this exact reuse).
+- 🤝 Best / 🥴 Worst Trade of the Year — highest/lowest `gradeScore` among this season's
+  *persisted* trade grades (see "Trade-grade persistence" below — this is the reason that fix
+  exists).
+- 🌟 Best Single-Game Performance — `findTopPerformances` (`player-points.js`) over the full
+  season's raw `starters`/`players_points`, fields every other consumer of `matchupsByWeek` has
+  always ignored.
+- 💎 Draft Steal of the Year (+ optional 🪦 Draft Bust) — ranks this draft class by season-long
+  points scored vs. by `pick_no`; the pick whose performance-rank beat its draft-rank by the
+  widest margin is the steal, the reverse is the bust. Reads `pollForDraftResultsSnapshot`'s
+  captured snapshot (see below) — gracefully omitted if no snapshot exists yet for the season.
+
+**Trade-grade persistence**: `buildTradeAnalysis` used to run only inside the live-notification
+loop and get discarded. `pollForTrades` now grades *every* trade in scope each cycle
+(`buildTradeAnalysisByTransactionId`, with a per-trade try/catch so one ungradeable trade doesn't
+break the cycle) and folds the result into `.state/trade-history.json` as a `grades` array
+(`rosterId, label, netValue, grade, gradeFlavor, gradeScore, isWinner`) plus a `season` field —
+both previously absent. A trade that fails to grade this cycle self-heals next poll, since the log
+is rebuilt from scratch every cycle against the same full trade list.
+
+**Post-draft snapshot** (`draft-results.js`, `pollForDraftResultsSnapshot`) — mirrors
+`pollForDraftPreview`'s shape but captures *results* instead of previewing an upcoming draft:
+gated on `draft.status === "complete"` rather than a countdown, one-shot per `draft_id` via
+`.state/draft-results-state.json`. Never sends a chat message — pure data capture for Draft
+Steal/Bust to read back at season's end. Unlike `draft-preview.js`'s Round 1 order, no
+`traded_picks` cross-reference is needed here: `/v1/draft/{id}/picks` already reflects each pick's
+real draft-time owner. Toggle: `DRAFT_RESULTS_SNAPSHOT_ENABLED`.
+
+**Hall of Fame** (`hall-of-fame.js`) — all-time per-manager career stats (W-L-T, points-for,
+championships, runner-ups, playoff appearances, seasons played), keyed by `user_id` (the one
+identifier stable across seasons) and always rendered under each manager's *current* name.
+
+- First run ever: `buildHallOfFameFromHistory` walks the `previous_league_id` chain (guard 25,
+  same precedent as `buildRecordBookFromHistory`/`buildAllTimeDivisionSeries`), fetching
+  `winners_bracket` per season (the one fetch those two precedents don't need) and folding each
+  season in via `mergeSeasonIntoHallOfFame`. Deliberately includes the *current* season in the
+  same walk — by the time `pollForPlayoffRecap` fires, the current season's regular season and
+  bracket are already fully decided, so no separate "current season" special case is needed.
+- Every later season-close: `mergeSeasonIntoHallOfFame` folds in just the one newly-finished
+  season using data already in memory at the `pollForPlayoffRecap` call site (zero extra Sleeper
+  calls) — unlike division-rivalry's "just re-walk, it's cheap" precedent, re-walking 10+ seasons
+  every single year here would not be free.
+- **Idempotency guard**: `mergeSeasonIntoHallOfFame` no-ops if `hallOfFame.lastMergedSeason ===
+  season`. The merge is persisted to `.state/hall-of-fame.json` *before* the Hall of Fame message
+  send is attempted — `pollForPlayoffRecap`'s only re-entry gate is `hasSentWeeklyReport` at the
+  very top, so without persisting the merge first, a transient send failure right after merging
+  would double-count that season's stats on the next successful poll.
+- Regular-season-only for W-L-T/points-for (weeks 1-`REGULAR_SEASON_END_WEEK`), matching what this
+  league's own standings have always meant; playoff success is tracked separately via
+  championships/runner-ups/playoff appearances. A roster is counted as a playoff appearance if it
+  shows up as a *direct* (non-placeholder) `t1`/`t2` value anywhere in `winners_bracket` — true
+  whether it entered Round 1 or got a bye into Round 2.
+- Toggle: `HALL_OF_FAME_ENABLED`.
+
+Preview/test: `npm run preview-awards -- --previous` replays a completed season (`--send` to push
+to the test chat). `npm run preview-hall-of-fame` does a fresh full chain walk by default (slow
+but ground-truth); `--from-cache` instantly renders whatever is already in
+`.state/hall-of-fame.json` instead.
+
 ## Milestone alerts (playoff clinch/elimination + all-time record book)
 
 Event-driven, in `milestones.js`. Detected once when a week's results are final (called from

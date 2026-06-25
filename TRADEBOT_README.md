@@ -84,6 +84,9 @@ These are the important ones:
 - `PLAYOFF_WEEKLY_REPORT_ENABLED`: weekly playoff results+preview (weeks 15-17), `true` or `false`, default `true`
 - `PLAYOFF_WEEKLY_REPORT_SEND_HOUR_ET` / `PLAYOFF_WEEKLY_REPORT_SEND_MINUTE_ET`: Thursday send time in Eastern time, default `19:45`
 - `PLAYOFF_RECAP_ENABLED`: championship + season recap, `true` or `false`, default `true`
+- `DRAFT_RESULTS_SNAPSHOT_ENABLED`: one-time post-draft pick snapshot (feeds Draft Steal/Bust), `true` or `false`, default `true`
+- `AWARDS_CEREMONY_ENABLED`: season awards ceremony, `true` or `false`, default `true`
+- `HALL_OF_FAME_ENABLED`: all-time career leaderboard, `true` or `false`, default `true`
 - `HEADLESS`: `false` is easier for debugging
 - `DRY_RUN`: `true` logs instead of sending to Snapchat
 - `RUN_ONCE`: `true` checks once and exits
@@ -551,6 +554,90 @@ npm run preview-playoff-weekly-report -- --previous
 ```
 
 Add `--week 15|16|17 --send` to push one specific week to the test chat.
+
+## Season Awards Ceremony + Hall of Fame
+
+Two more one-time-per-season messages, sent right after the Championship + Season Recap (same
+Tuesday, same `pollForPlayoffRecap` flow) — not new cadences.
+
+**Awards Ceremony** — 8 manager-level season-arc awards, each line omitted (not shown as
+empty/null) if its data isn't available that season:
+
+```text
+🏆 Capitol Hill Season Awards
+———————————————————————————
+
+🚀 Most Improved
+JoshPT — +38% win rate (2nd half vs. 1st)
+
+📉 Biggest Collapse
+Jme33708 — -29% win rate (2nd half vs. 1st)
+
+🍀 Luckiest Manager
+DrtyBubble — 64% record vs. 51% all-play
+
+💀 Unluckiest Manager
+Team Ayahuasca 🗿 — 43% record vs. 58% all-play
+
+🤝 Best Trade of the Year
+Capitol Crushers (Grade: A+)
+
+🥴 Worst Trade of the Year
+Team Rowan (Grade: D-)
+
+🌟 Best Single-Game Performance
+Player Name (RB) — 54.2 pts (Week 9, The Bad Man)
+
+💎 Draft Steal of the Year
+Player Name (WR) — Pick 47, 198.3 pts (JoshPT)
+
+🪦 Draft Bust
+Player Name (QB) — Pick 3, 41.0 pts (Alexandria Ocasio-Cortez)
+```
+
+Most Improved/Biggest Collapse compare win% across the first half (weeks 1-7) vs. second half
+(weeks 8-14) of the regular season; Luckiest/Unluckiest compare actual win% against all-play win%.
+Best/Worst Trade reuse this season's already-graded trade history. Best Single-Game Performance
+and Draft Steal/Bust read per-player points straight out of Sleeper's raw matchup data
+(`players_points`/`starters`, extracted by `player-points.js`) and this season's post-draft pick
+snapshot (`draft-results.js`, captured once `draft.status === "complete"`). Toggle each
+independently with `AWARDS_CEREMONY_ENABLED` / `DRAFT_RESULTS_SNAPSHOT_ENABLED`.
+
+**Hall of Fame** — all-time per-manager career stats, aggregated across the league's full history
+by walking the `previous_league_id` chain once, then cheaply folded forward one season at a time
+from then on:
+
+```text
+📜 Capitol Hill Hall of Fame
+———————————————————————————
+
+1. The Bad Man 🏆x2 🥈x1
+   58-42-0 · 5821.4 PF · 4 playoff trips · 7 seasons
+
+2. Alexandria Ocasio-Cortez 🏆x1
+   54-46-0 · 5690.2 PF · 5 playoff trips · 7 seasons
+...
+```
+
+Career stats are keyed by Sleeper's `user_id` (the one identifier stable across seasons) and
+always rendered under each manager's *current* team/display name, even for stats earned under an
+old name. Toggle with `HALL_OF_FAME_ENABLED`.
+
+Preview the Awards Ceremony (no Snapchat, replays a finished season):
+
+```bash
+npm run preview-awards -- --previous
+```
+
+Add `--send` to push it to the test chat. Preview the Hall of Fame (fresh chain walk by default,
+slow but ground-truth):
+
+```bash
+npm run preview-hall-of-fame
+```
+
+Add `--from-cache` to instantly render whatever is already in `.state/hall-of-fame.json` instead
+of re-walking history, and `--send` to push it to the test chat.
 
 ## Trade Message Format
 
