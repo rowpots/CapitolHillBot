@@ -17,6 +17,7 @@ import {
   isThursdayAfterHourInEastern,
   isTuesdayAfterHourInEastern,
   isWeekdayAfterHourInEastern,
+  isWeekdayAtOrAfterTimeInEastern,
 } from "./weekly-report.js";
 import {
   buildRecordBookFromHistory,
@@ -24,6 +25,10 @@ import {
   createEmptyRecordBook,
   detectMilestones,
 } from "./milestones.js";
+import {
+  BIG_MATCHUPS_MIN_WEEK,
+  buildBigMatchupsReport,
+} from "./big-matchups.js";
 import {
   buildAllTimeDivisionSeries,
   buildDivisionRivalryReport,
@@ -51,6 +56,10 @@ const POWER_RANKINGS_STATE_FILE = path.join(
 const DIVISION_RIVALRY_STATE_FILE = path.join(
   STATE_DIR,
   "division-rivalry-state.json"
+);
+const BIG_MATCHUPS_STATE_FILE = path.join(
+  STATE_DIR,
+  "big-matchups-state.json"
 );
 const MILESTONE_STATE_FILE = path.join(STATE_DIR, "milestone-state.json");
 const RECORD_BOOK_FILE = path.join(STATE_DIR, "record-book.json");
@@ -121,6 +130,15 @@ const config = {
     process.env.DIVISION_RIVALRY_ENABLED,
     true
   ),
+  bigMatchupsEnabled: parseBoolean(process.env.BIG_MATCHUPS_ENABLED, true),
+  bigMatchupsSendHourEt: Math.max(
+    0,
+    Math.min(23, parseInteger(process.env.BIG_MATCHUPS_SEND_HOUR_ET, 19))
+  ),
+  bigMatchupsSendMinuteEt: Math.max(
+    0,
+    Math.min(59, parseInteger(process.env.BIG_MATCHUPS_SEND_MINUTE_ET, 45))
+  ),
 };
 
 const bot = new SnapBot();
@@ -154,6 +172,7 @@ async function main() {
   const weeklyReportState = await loadWeeklyReportState();
   const powerRankingsState = await loadPowerRankingsState();
   const divisionRivalryState = await loadDivisionRivalryState();
+  const bigMatchupsState = await loadBigMatchupsState();
 
   if (!config.dryRun) {
     await startSnapchatSession();
@@ -188,6 +207,7 @@ async function main() {
       await pollForWeeklyReport(weeklyReportState);
       await pollForPowerRankings(powerRankingsState);
       await pollForDivisionRivalry(divisionRivalryState);
+      await pollForBigMatchups(bigMatchupsState);
       await pollForTrades(state);
     } catch (error) {
       console.error("Polling cycle failed, but the bot will keep running.");
@@ -706,6 +726,106 @@ async function pollForDivisionRivalry(divisionRivalryState) {
     leagueId: config.sleeperLeagueId,
   });
   await saveDivisionRivalryState(divisionRivalryState);
+}
+
+async function pollForBigMatchups(bigMatchupsState) {
+  if (!config.bigMatchupsEnabled) {
+    return;
+  }
+
+  const now = new Date();
+  if (
+    !isWeekdayAtOrAfterTimeInEastern(
+      now,
+      "Thursday",
+      config.bigMatchupsSendHourEt,
+      config.bigMatchupsSendMinuteEt
+    )
+  ) {
+    return;
+  }
+
+  const league = await fetchJson(
+    `https://api.sleeper.app/v1/league/${config.sleeperLeagueId}`
+  );
+  const season = String(league?.season ?? "").trim();
+
+  if (!season) {
+    console.warn("Big matchups preview skipped because the Sleeper season is unavailable.");
+    return;
+  }
+
+  const matchupsByWeek = await fetchMatchupsByWeek({
+    leagueId: config.sleeperLeagueId,
+    startWeek: 1,
+    endWeek: REGULAR_SEASON_END_WEEK,
+  });
+  const latestCompletedWeek = findLatestCompletedWeek(
+    matchupsByWeek,
+    REGULAR_SEASON_END_WEEK
+  );
+
+  // Previews the *upcoming* week's matchups, same displayWeek convention as
+  // power rankings.
+  const displayWeek = latestCompletedWeek + 1;
+  if (latestCompletedWeek < BIG_MATCHUPS_MIN_WEEK || displayWeek > REGULAR_SEASON_END_WEEK) {
+    return;
+  }
+
+  if (hasSentWeeklyReport(bigMatchupsState, season, displayWeek)) {
+    return;
+  }
+
+  const [rosters, users] = await Promise.all([
+    fetchJson(`https://api.sleeper.app/v1/league/${config.sleeperLeagueId}/rosters`),
+    fetchJson(`https://api.sleeper.app/v1/league/${config.sleeperLeagueId}/users`),
+  ]);
+  const playoffTeams =
+    Number(league?.settings?.playoff_teams) > 0
+      ? Number(league.settings.playoff_teams)
+      : 6;
+  const report = buildWeeklyReport({
+    league,
+    rosters,
+    users,
+    matchupsByWeek,
+    throughWeek: latestCompletedWeek,
+    regularSeasonEndWeek: REGULAR_SEASON_END_WEEK,
+    playoffTeams,
+    simulationCount: config.weeklyReportSimulationCount,
+  });
+
+  const bigMatchupsReport = buildBigMatchupsReport({
+    league,
+    standings: report.standings,
+    matchupsByWeek,
+    displayWeek,
+  });
+
+  if (!bigMatchupsReport) {
+    console.log(
+      `Big matchups preview skipped: no marquee matchups for week ${displayWeek}.`
+    );
+  } else if (config.dryRun) {
+    console.log(`[Dry Run] ${bigMatchupsReport.textMessage}`);
+    return;
+  } else {
+    await sendChatMessage(
+      bigMatchupsReport.textMessage,
+      `big matchups preview for week ${displayWeek}`
+    );
+  }
+
+  if (config.dryRun) {
+    return;
+  }
+
+  markWeeklyReportSent(bigMatchupsState, {
+    season,
+    week: displayWeek,
+    leagueId: config.sleeperLeagueId,
+  });
+  await saveBigMatchupsState(bigMatchupsState);
 }
 
 async function refreshMilestones({
@@ -1812,6 +1932,38 @@ async function saveDivisionRivalryState(state) {
 
   await fs.writeFile(
     DIVISION_RIVALRY_STATE_FILE,
+    JSON.stringify(serialized, null, 2),
+    "utf8"
+  );
+}
+
+async function loadBigMatchupsState() {
+  await fs.mkdir(STATE_DIR, { recursive: true });
+
+  try {
+    const fileContents = await fs.readFile(BIG_MATCHUPS_STATE_FILE, "utf8");
+    const parsed = parseJsonFile(fileContents);
+
+    return {
+      sentBySeason: parsed?.sentBySeason ?? {},
+    };
+  } catch (error) {
+    return {
+      sentBySeason: {},
+    };
+  }
+}
+
+async function saveBigMatchupsState(state) {
+  await fs.mkdir(STATE_DIR, { recursive: true });
+
+  const serialized = {
+    updatedAt: new Date().toISOString(),
+    sentBySeason: state.sentBySeason ?? {},
+  };
+
+  await fs.writeFile(
+    BIG_MATCHUPS_STATE_FILE,
     JSON.stringify(serialized, null, 2),
     "utf8"
   );

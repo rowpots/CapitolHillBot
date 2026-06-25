@@ -76,6 +76,8 @@ These are the important ones:
 - `PLAYOFF_ALERTS_ENABLED`: playoff clinch/elimination alerts, `true` or `false`, default `true`
 - `RECORD_BOOK_ENABLED`: all-time record-book alerts, `true` or `false`, default `true`
 - `DIVISION_RIVALRY_ENABLED`: quarterly interdivision rivalry post, `true` or `false`, default `true`
+- `BIG_MATCHUPS_ENABLED`: Thursday marquee-matchups preview, `true` or `false`, default `true`
+- `BIG_MATCHUPS_SEND_HOUR_ET` / `BIG_MATCHUPS_SEND_MINUTE_ET`: Thursday send time in Eastern time, default `19:45`
 - `HEADLESS`: `false` is easier for debugging
 - `DRY_RUN`: `true` logs instead of sending to Snapchat
 - `RUN_ONCE`: `true` checks once and exits
@@ -256,6 +258,53 @@ npm run preview-power-rankings -- --previous --week 14
 
 Add `--send` (and optionally `--chat-id`) to deliver it to the test chat. Weights live as tunable
 constants at the top of [weekly-report.js](c:/Users/rowan/OneDrive/Desktop/tradebot/SnapBot/weekly-report.js).
+
+## Big Matchups Preview
+
+A second, separate Thursday post — not bundled with power rankings — sent close to Thursday Night
+Football (`BIG_MATCHUPS_SEND_HOUR_ET` / `BIG_MATCHUPS_SEND_MINUTE_ET`, default 7:45 PM Eastern,
+about 30 minutes before a typical kickoff), once playoff odds are meaningful enough to be worth
+previewing (from Week 8 on). Toggle with `BIG_MATCHUPS_ENABLED`.
+
+Each real upcoming matchup gets sorted into at most one category. Elimination Watch and Clinch
+Watch name the specific team(s) at stake (and call out both, if both qualify) since those are
+about individual stakes; Showdown and Draft Position Bowl stay as a plain "vs." since both teams
+are equally the point there:
+
+- **🎯 Elimination Watch** — one (or both) team is in real danger of being eliminated
+- **🔒 Clinch Watch** — one (or both) team is close to locking up a playoff spot
+- **⚔️ Playoff Showdown** — both teams are genuinely in the playoff hunt, head to head
+- **🏗️ Draft Position Bowl** — both teams are already out of contention
+
+If nothing qualifies that week, nothing gets sent — it's not trying to recap every game, just the
+ones with real stakes.
+
+```text
+📅 Capitol Hill Week 11 Matchups to Watch
+—————————————————————————————————
+
+🎯 Elimination Watch
+oJacob is in danger of elimination vs. Alexandria Ocasio-Cortez
+Hayden9999999 is in danger of elimination vs. goodforyousister
+
+🔒 Clinch Watch
+The Bad Man and JoshPT could both clinch a playoff spot
+Emmauel Macron could clinch a playoff spot vs. Team Ayahuasca 🗿
+
+⚔️ Playoff Showdown
+DrtyBubble vs. Hoags02
+
+🏗️ Draft Position Bowl
+Thejigler vs. Jme33708
+```
+
+Preview a season's worth of weeks (no Snapchat):
+
+```bash
+npm run preview-big-matchups -- --previous
+```
+
+Add `--week N --send` to push one specific week's report to the test chat.
 
 ## Milestone Alerts
 

@@ -83,6 +83,36 @@ in `weekly-report.js`; scheduled via `pollForPowerRankings` in `index.js` (mirro
 consts (`POWER_RANKING_WEIGHTS`) at the top of `weekly-report.js`. No dynasty-value dependency.
 Preview/test with `npm run preview-power-rankings` (derives arrows by diffing week W vs W-1).
 
+## Big matchups preview (Thursdays, near Thursday Night Football)
+
+Second, independent Thursday post, in `big-matchups.js`. Not alongside power rankings — gated on
+its own `BIG_MATCHUPS_SEND_HOUR_ET`/`BIG_MATCHUPS_SEND_MINUTE_ET` (default 7:45 PM ET, ~30 min
+before a typical TNF kickoff) via the new minute-granular `isWeekdayAtOrAfterTimeInEastern`
+(`weekly-report.js`) — the existing hour-only gates aren't precise enough for a 30-minute target.
+Own state (`.state/big-matchups-state.json`) and dedup, fully independent of
+`pollForPowerRankings` so one failing doesn't affect the other. Gated to
+`latestCompletedWeek >= BIG_MATCHUPS_MIN_WEEK` (7; one week before milestones' clinch/elim
+gate) since playoff odds aren't meaningful earlier.
+
+`buildBigMatchupsReport` takes the same `report.standings` (`playoffOdds`/`rank`) already computed
+by `buildWeeklyReport`, plus the upcoming week's matchup pairings, and buckets each real matchup
+into **at most one** of (checked in this priority order, tunable thresholds at the top of the
+file): 🎯 Elimination Watch, 🔒 Clinch Watch (capped just under the milestone clinch threshold so
+the two never overlap), ⚔️ Playoff Showdown (both teams in a contested odds band), 🏗️ Draft
+Position Bowl (both teams clearly out). Returns `null` (skip send) if nothing qualifies that week.
+Elimination/Clinch lines name the specific team(s) at risk/close (`formatMatchupLine` in
+`big-matchups.js`, e.g. "X is in danger of elimination vs. Y", or "X and Y could both clinch a
+playoff spot" when both qualify) since those buckets are about individual stakes; Showdown/Draft
+Position Bowl stay a plain "X vs. Y" since both teams are equally the point there by definition.
+
+The thresholds were tuned against a real season replay, not guessed — an "either team qualifies"
+check for Elimination/Clinch initially classified nearly every matchup nearly every week (defeats
+the "marquee" framing), while a "both ≥50%" Showdown check never fired once across 13 weeks (this
+league's fixed schedule rarely pairs two similarly-positioned teams together). Tightened bands now
+give 2-6 of 6 matchups classified per week instead of a blanket 6/6.
+Preview/test: `npm run preview-big-matchups -- --previous` replays Weeks 8-14; `--week N --send`
+pushes one specific week to the test chat.
+
 ## Milestone alerts (playoff clinch/elimination + all-time record book)
 
 Event-driven, in `milestones.js`. Detected once when a week's results are final (called from

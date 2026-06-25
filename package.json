@@ -12,6 +12,7 @@
     "preview-power-rankings": "node preview-power-rankings.js",
     "preview-milestones": "node preview-milestones.js",
     "preview-division-rivalry": "node preview-division-rivalry.js",
+    "preview-big-matchups": "node preview-big-matchups.js",
     "preview-trade-card": "node preview-trade-card.js"
   },
   "author": "Roger Rodrigues",

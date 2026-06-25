@@ -402,6 +402,21 @@ export function isThursdayAfterHourInEastern(date, hour24) {
   return isWeekdayAfterHourInEastern(date, "Thursday", hour24);
 }
 
+// Minute-granular gate for sends that need to land close to a specific clock
+// time (e.g. "30 min before kickoff") rather than just "sometime after hour X".
+export function isWeekdayAtOrAfterTimeInEastern(date, weekday, hour24, minute = 0) {
+  const parts = getEasternDateParts(date);
+  if (parts.weekday !== weekday) {
+    return false;
+  }
+
+  if (parts.hour !== hour24) {
+    return parts.hour > hour24;
+  }
+
+  return parts.minute >= minute;
+}
+
 function buildStandings({
   rosters,
   rosterLookup,
@@ -773,6 +788,7 @@ function getEasternDateParts(date) {
     timeZone: EASTERN_TIME_ZONE,
     weekday: "long",
     hour: "numeric",
+    minute: "numeric",
     hour12: false,
   });
   const parts = formatter.formatToParts(date);
@@ -780,6 +796,7 @@ function getEasternDateParts(date) {
   return {
     weekday: parts.find((part) => part.type === "weekday")?.value ?? "",
     hour: Number(parts.find((part) => part.type === "hour")?.value ?? "0") || 0,
+    minute: Number(parts.find((part) => part.type === "minute")?.value ?? "0") || 0,
   };
 }
 
