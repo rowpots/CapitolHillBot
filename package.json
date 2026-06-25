@@ -14,6 +14,8 @@
     "preview-division-rivalry": "node preview-division-rivalry.js",
     "preview-big-matchups": "node preview-big-matchups.js",
     "preview-draft-preview": "node preview-draft-preview.js",
+    "preview-playoff-bracket": "node preview-playoff-bracket.js",
+    "preview-playoff-weekly-report": "node preview-playoff-weekly-report.js",
     "preview-trade-card": "node preview-trade-card.js"
   },
   "author": "Roger Rodrigues",

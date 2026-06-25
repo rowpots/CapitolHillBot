@@ -142,6 +142,63 @@ Preview/test: `npm run preview-draft-preview` (no live state writes); `--send` p
 chat. No `--previous` mode — unlike the other previews, there's no "replay a past week" concept
 here (a past draft's "available rookies" aren't rookies/available anymore).
 
+## Playoffs (bracket reveal, weekly report, championship + season recap)
+
+Four messages covering weeks 15-17 (`playoff_week_start` + 3 rounds for this league's 6-team/
+2-bye format), all in `playoffs.js`, all gated behind `isBracketTrustworthy` — Sleeper's
+`GET /v1/league/{id}/winners_bracket` returns a fully-shaped but meaningless placeholder bracket
+(confirmed: even a not-yet-started season already returns one, with arbitrary roster IDs) until
+the regular season is actually complete, so nothing here trusts that endpoint until
+`latestCompletedWeek >= REGULAR_SEASON_END_WEEK`.
+
+- **Bracket Reveal** — one-time, Tuesday (reuses `weeklyReportSendHourEt`, dormant by then since
+  the regular Tuesday weekly report stops at week 14). Full tree: all seeds, who's on a bye,
+  concrete Round 1 matchups, and the *projected* Round 2/3 path. `pollForPlayoffBracketReveal`.
+- **Weekly Playoff Report** — recurring, **Thursday** (own `PLAYOFF_WEEKLY_REPORT_SEND_HOUR_ET`/
+  `_MINUTE_ET`, independent of `BIG_MATCHUPS_SEND_HOUR_ET` even though both default to 19:45).
+  Week 15 = preview only (the two real games; byes have `matchup_id: null` that week, confirmed
+  against real data). Week 16 = Week 15 results + Week 16 preview (the 2 semifinals + the 5th/6th
+  placement game, fed by the two Round-1 *losers*). Week 17 = Week 16 results + an explicit
+  "headed to the Championship" / "playing for 3rd" highlight + Week 17 preview (championship +
+  3rd place). `pollForPlayoffWeeklyReport`.
+- **Championship + Season Recap** — Tuesday after Week 17 is final, two sequential messages (same
+  pattern as the Tuesday standings+recap: recap is best-effort, doesn't block the first message).
+  Championship Recap crowns the champion + reports 3rd place; Season Recap is final standings
+  1st–12th plus season-long superlatives (highest/lowest week score, biggest blowout, longest win
+  streak — scanned across *all* of weeks 1-17, not just the regular season, reusing
+  `realWeekScores`/`realWeekMatchups`/`longestWinStreakForSeason`, exported from `milestones.js`
+  for this purpose rather than duplicated). `pollForPlayoffRecap`.
+
+**The recursive bracket-slot resolver** (`resolveBracketSlot`) is the core piece: a `winners_bracket`
+entry's `t1`/`t2` resolves directly if populated, or recurses through `t1_from`/`t2_from` (`{w:
+matchupNumber}` or `{l: matchupNumber}`) into a `"Winner of (A vs B)"` placeholder when the source
+game isn't decided yet. The same function produces the Bracket Reveal's all-placeholder projection
+*and* the Weekly Report's real-name fill-in as rounds complete — no branching between the two
+cases, since it just reads whatever the bracket JSON currently has. The Bracket Reveal additionally
+uses a one-letter "Game A/Game B" legend for the Round 3 line (`Championship: Winner of Game A vs.
+Winner of Game B`) instead of nesting the resolver two levels deep, since that nests into an
+unreadable wall of parentheses on a phone.
+
+**Baselining** (mirrors `baselineMilestoneState`): a bot started/restarted mid-playoffs shouldn't
+post a stale Bracket Reveal after Round 1 already happened, or a stale Week 15 preview after
+Week 16 already happened — both pollers silently mark the relevant week(s) sent without sending on
+the first sighting of a new season. The recap pair needs no baselining (a late-but-correct
+championship recap is fine).
+
+State: `.state/playoff-bracket-state.json`, `playoff-weekly-state.json`, `playoff-recap-state.json`
+— same `sentBySeason` shape as `bigMatchupsState`/`draftPreviewState`, reusing
+`hasSentWeeklyReport`/`markWeeklyReportSent` as-is. Toggles: `PLAYOFF_BRACKET_REVEAL_ENABLED`,
+`PLAYOFF_WEEKLY_REPORT_ENABLED`, `PLAYOFF_RECAP_ENABLED`.
+
+Preview/test: `npm run preview-playoff-bracket -- --previous` (covers Bracket Reveal +
+Championship/Season Recap together, `--type=reveal|recap|both`, `--send`) and
+`npm run preview-playoff-weekly-report -- --previous` (Weeks 15-17, `--week N --send`) — both
+replay against a completed season via `previous_league_id` (the live season's bracket isn't
+trustworthy until week 14 anyway). The bracket-reveal preview strips `w`/`l`/decided `t1`/`t2`
+values back to the genuinely-undecided shape before building, so replaying a *finished* season
+still shows the real placeholder text a league would have actually seen, not a result-spoiled
+version of it.
+
 ## Milestone alerts (playoff clinch/elimination + all-time record book)
 
 Event-driven, in `milestones.js`. Detected once when a week's results are final (called from

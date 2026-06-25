@@ -39,6 +39,14 @@ import {
   buildDraftPreviewReport,
   isWithinDraftPreviewWindow,
 } from "./draft-preview.js";
+import {
+  buildChampionshipRecap,
+  buildPlayoffBracketReveal,
+  buildSeasonRecap,
+  buildWeeklyPlayoffReport,
+  isBracketTrustworthy,
+  isWeekScored,
+} from "./playoffs.js";
 
 dotenv.config();
 installTimestampedConsole();
@@ -68,6 +76,18 @@ const BIG_MATCHUPS_STATE_FILE = path.join(
 const DRAFT_PREVIEW_STATE_FILE = path.join(
   STATE_DIR,
   "draft-preview-state.json"
+);
+const PLAYOFF_BRACKET_STATE_FILE = path.join(
+  STATE_DIR,
+  "playoff-bracket-state.json"
+);
+const PLAYOFF_WEEKLY_STATE_FILE = path.join(
+  STATE_DIR,
+  "playoff-weekly-state.json"
+);
+const PLAYOFF_RECAP_STATE_FILE = path.join(
+  STATE_DIR,
+  "playoff-recap-state.json"
 );
 const MILESTONE_STATE_FILE = path.join(STATE_DIR, "milestone-state.json");
 const RECORD_BOOK_FILE = path.join(STATE_DIR, "record-book.json");
@@ -152,6 +172,23 @@ const config = {
     1,
     parseInteger(process.env.DRAFT_PREVIEW_LEAD_HOURS, 48)
   ),
+  playoffBracketRevealEnabled: parseBoolean(
+    process.env.PLAYOFF_BRACKET_REVEAL_ENABLED,
+    true
+  ),
+  playoffWeeklyReportEnabled: parseBoolean(
+    process.env.PLAYOFF_WEEKLY_REPORT_ENABLED,
+    true
+  ),
+  playoffWeeklyReportSendHourEt: Math.max(
+    0,
+    Math.min(23, parseInteger(process.env.PLAYOFF_WEEKLY_REPORT_SEND_HOUR_ET, 19))
+  ),
+  playoffWeeklyReportSendMinuteEt: Math.max(
+    0,
+    Math.min(59, parseInteger(process.env.PLAYOFF_WEEKLY_REPORT_SEND_MINUTE_ET, 45))
+  ),
+  playoffRecapEnabled: parseBoolean(process.env.PLAYOFF_RECAP_ENABLED, true),
 };
 
 const bot = new SnapBot();
@@ -187,6 +224,9 @@ async function main() {
   const divisionRivalryState = await loadDivisionRivalryState();
   const bigMatchupsState = await loadBigMatchupsState();
   const draftPreviewState = await loadDraftPreviewState();
+  const playoffBracketState = await loadPlayoffBracketState();
+  const playoffWeeklyState = await loadPlayoffWeeklyState();
+  const playoffRecapState = await loadPlayoffRecapState();
 
   if (!config.dryRun) {
     await startSnapchatSession();
@@ -222,6 +262,9 @@ async function main() {
       await pollForPowerRankings(powerRankingsState);
       await pollForDivisionRivalry(divisionRivalryState);
       await pollForBigMatchups(bigMatchupsState);
+      await pollForPlayoffBracketReveal(playoffBracketState);
+      await pollForPlayoffWeeklyReport(playoffWeeklyState);
+      await pollForPlayoffRecap(playoffRecapState);
       await pollForDraftPreview(draftPreviewState);
       await pollForTrades(state);
     } catch (error) {
@@ -841,6 +884,374 @@ async function pollForBigMatchups(bigMatchupsState) {
     leagueId: config.sleeperLeagueId,
   });
   await saveBigMatchupsState(bigMatchupsState);
+}
+
+async function pollForPlayoffBracketReveal(playoffBracketState) {
+  if (!config.playoffBracketRevealEnabled) {
+    return;
+  }
+
+  const now = new Date();
+  // Reuses the (now-dormant, once week 14 is sent) Tuesday weekly-report slot.
+  if (!isTuesdayAfterHourInEastern(now, config.weeklyReportSendHourEt)) {
+    return;
+  }
+
+  const league = await fetchJson(
+    `https://api.sleeper.app/v1/league/${config.sleeperLeagueId}`
+  );
+  const season = String(league?.season ?? "").trim();
+  if (!season) {
+    console.warn("Playoff bracket reveal skipped because the Sleeper season is unavailable.");
+    return;
+  }
+
+  const playoffWeekStart = Number(league?.settings?.playoff_week_start) || 15;
+
+  const regularSeasonMatchupsByWeek = await fetchMatchupsByWeek({
+    leagueId: config.sleeperLeagueId,
+    startWeek: 1,
+    endWeek: REGULAR_SEASON_END_WEEK,
+  });
+  const latestCompletedRegularSeasonWeek = findLatestCompletedWeek(
+    regularSeasonMatchupsByWeek,
+    REGULAR_SEASON_END_WEEK
+  );
+
+  if (!isBracketTrustworthy(latestCompletedRegularSeasonWeek, REGULAR_SEASON_END_WEEK)) {
+    return;
+  }
+
+  // Baseline: if Round 1 already has results by the first time this season's
+  // state loads (e.g. the bot was started/restarted mid-playoffs), the
+  // moment for "the bracket was just revealed" has clearly passed -- mark it
+  // sent silently rather than posting a stale reveal after the fact.
+  if (playoffBracketState.baselinedSeason !== season) {
+    playoffBracketState.baselinedSeason = season;
+    const round1MatchupsByWeek = await fetchMatchupsByWeek({
+      leagueId: config.sleeperLeagueId,
+      startWeek: playoffWeekStart,
+      endWeek: playoffWeekStart,
+    });
+    if (isWeekScored(round1MatchupsByWeek, playoffWeekStart)) {
+      markWeeklyReportSent(playoffBracketState, {
+        season,
+        week: playoffWeekStart,
+        leagueId: config.sleeperLeagueId,
+      });
+    }
+    await savePlayoffBracketState(playoffBracketState);
+  }
+
+  if (hasSentWeeklyReport(playoffBracketState, season, playoffWeekStart)) {
+    return;
+  }
+
+  const [rosters, users, winnersBracket] = await Promise.all([
+    fetchJson(`https://api.sleeper.app/v1/league/${config.sleeperLeagueId}/rosters`),
+    fetchJson(`https://api.sleeper.app/v1/league/${config.sleeperLeagueId}/users`),
+    fetchJson(`https://api.sleeper.app/v1/league/${config.sleeperLeagueId}/winners_bracket`),
+  ]);
+  const playoffTeams =
+    Number(league?.settings?.playoff_teams) > 0
+      ? Number(league.settings.playoff_teams)
+      : 6;
+  const report = buildWeeklyReport({
+    league,
+    rosters,
+    users,
+    matchupsByWeek: regularSeasonMatchupsByWeek,
+    throughWeek: REGULAR_SEASON_END_WEEK,
+    regularSeasonEndWeek: REGULAR_SEASON_END_WEEK,
+    playoffTeams,
+    simulationCount: config.weeklyReportSimulationCount,
+  });
+
+  const bracketReveal = buildPlayoffBracketReveal({
+    league,
+    standings: report.standings,
+    winnersBracket,
+    playoffWeekStart,
+  });
+
+  if (!bracketReveal) {
+    console.log("Playoff bracket reveal skipped: bracket data unavailable.");
+  } else if (config.dryRun) {
+    console.log(`[Dry Run] ${bracketReveal.textMessage}`);
+    return;
+  } else {
+    await sendChatMessage(bracketReveal.textMessage, "playoff bracket reveal");
+  }
+
+  if (config.dryRun) {
+    return;
+  }
+
+  markWeeklyReportSent(playoffBracketState, {
+    season,
+    week: playoffWeekStart,
+    leagueId: config.sleeperLeagueId,
+  });
+  await savePlayoffBracketState(playoffBracketState);
+}
+
+async function pollForPlayoffWeeklyReport(playoffWeeklyState) {
+  if (!config.playoffWeeklyReportEnabled) {
+    return;
+  }
+
+  const now = new Date();
+  if (
+    !isWeekdayAtOrAfterTimeInEastern(
+      now,
+      "Thursday",
+      config.playoffWeeklyReportSendHourEt,
+      config.playoffWeeklyReportSendMinuteEt
+    )
+  ) {
+    return;
+  }
+
+  const league = await fetchJson(
+    `https://api.sleeper.app/v1/league/${config.sleeperLeagueId}`
+  );
+  const season = String(league?.season ?? "").trim();
+  if (!season) {
+    console.warn("Weekly playoff report skipped because the Sleeper season is unavailable.");
+    return;
+  }
+
+  const playoffWeekStart = Number(league?.settings?.playoff_week_start) || 15;
+  const round2Week = playoffWeekStart + 1;
+  const round3Week = playoffWeekStart + 2;
+
+  const regularSeasonMatchupsByWeek = await fetchMatchupsByWeek({
+    leagueId: config.sleeperLeagueId,
+    startWeek: 1,
+    endWeek: REGULAR_SEASON_END_WEEK,
+  });
+  const latestCompletedRegularSeasonWeek = findLatestCompletedWeek(
+    regularSeasonMatchupsByWeek,
+    REGULAR_SEASON_END_WEEK
+  );
+  if (!isBracketTrustworthy(latestCompletedRegularSeasonWeek, REGULAR_SEASON_END_WEEK)) {
+    return;
+  }
+
+  const playoffMatchupsByWeek = await fetchMatchupsByWeek({
+    leagueId: config.sleeperLeagueId,
+    startWeek: playoffWeekStart,
+    endWeek: round3Week,
+  });
+
+  // Baseline: a bot started/restarted mid-playoffs shouldn't post a stale
+  // "Week 15 preview" once Week 16 has already happened, etc.
+  if (playoffWeeklyState.baselinedSeason !== season) {
+    playoffWeeklyState.baselinedSeason = season;
+    if (isWeekScored(playoffMatchupsByWeek, round2Week)) {
+      markWeeklyReportSent(playoffWeeklyState, {
+        season,
+        week: playoffWeekStart,
+        leagueId: config.sleeperLeagueId,
+      });
+    }
+    if (isWeekScored(playoffMatchupsByWeek, round3Week)) {
+      markWeeklyReportSent(playoffWeeklyState, {
+        season,
+        week: round2Week,
+        leagueId: config.sleeperLeagueId,
+      });
+    }
+    await savePlayoffWeeklyState(playoffWeeklyState);
+  }
+
+  let displayWeek = null;
+  for (const candidateWeek of [playoffWeekStart, round2Week, round3Week]) {
+    if (hasSentWeeklyReport(playoffWeeklyState, season, candidateWeek)) {
+      continue;
+    }
+    if (candidateWeek === playoffWeekStart || isWeekScored(playoffMatchupsByWeek, candidateWeek - 1)) {
+      displayWeek = candidateWeek;
+      break;
+    }
+  }
+
+  if (displayWeek === null) {
+    return;
+  }
+
+  const [rosters, users, winnersBracket] = await Promise.all([
+    fetchJson(`https://api.sleeper.app/v1/league/${config.sleeperLeagueId}/rosters`),
+    fetchJson(`https://api.sleeper.app/v1/league/${config.sleeperLeagueId}/users`),
+    fetchJson(`https://api.sleeper.app/v1/league/${config.sleeperLeagueId}/winners_bracket`),
+  ]);
+  const playoffTeams =
+    Number(league?.settings?.playoff_teams) > 0
+      ? Number(league.settings.playoff_teams)
+      : 6;
+  const report = buildWeeklyReport({
+    league,
+    rosters,
+    users,
+    matchupsByWeek: regularSeasonMatchupsByWeek,
+    throughWeek: REGULAR_SEASON_END_WEEK,
+    regularSeasonEndWeek: REGULAR_SEASON_END_WEEK,
+    playoffTeams,
+    simulationCount: config.weeklyReportSimulationCount,
+  });
+
+  const playoffReport = buildWeeklyPlayoffReport({
+    league,
+    standings: report.standings,
+    winnersBracket,
+    matchupsByWeek: playoffMatchupsByWeek,
+    displayWeek,
+    playoffWeekStart,
+  });
+
+  if (!playoffReport) {
+    console.log(`Weekly playoff report skipped: no content for week ${displayWeek}.`);
+  } else if (config.dryRun) {
+    console.log(`[Dry Run] ${playoffReport.textMessage}`);
+    return;
+  } else {
+    await sendChatMessage(
+      playoffReport.textMessage,
+      `weekly playoff report for week ${displayWeek}`
+    );
+  }
+
+  if (config.dryRun) {
+    return;
+  }
+
+  markWeeklyReportSent(playoffWeeklyState, {
+    season,
+    week: displayWeek,
+    leagueId: config.sleeperLeagueId,
+  });
+  await savePlayoffWeeklyState(playoffWeeklyState);
+}
+
+async function pollForPlayoffRecap(playoffRecapState) {
+  if (!config.playoffRecapEnabled) {
+    return;
+  }
+
+  const now = new Date();
+  if (!isTuesdayAfterHourInEastern(now, config.weeklyReportSendHourEt)) {
+    return;
+  }
+
+  const league = await fetchJson(
+    `https://api.sleeper.app/v1/league/${config.sleeperLeagueId}`
+  );
+  const season = String(league?.season ?? "").trim();
+  if (!season) {
+    console.warn("Playoff recap skipped because the Sleeper season is unavailable.");
+    return;
+  }
+
+  const playoffWeekStart = Number(league?.settings?.playoff_week_start) || 15;
+  const lastPlayoffWeek = playoffWeekStart + 2;
+
+  if (hasSentWeeklyReport(playoffRecapState, season, lastPlayoffWeek)) {
+    return;
+  }
+
+  const regularSeasonMatchupsByWeek = await fetchMatchupsByWeek({
+    leagueId: config.sleeperLeagueId,
+    startWeek: 1,
+    endWeek: REGULAR_SEASON_END_WEEK,
+  });
+  const latestCompletedRegularSeasonWeek = findLatestCompletedWeek(
+    regularSeasonMatchupsByWeek,
+    REGULAR_SEASON_END_WEEK
+  );
+  if (!isBracketTrustworthy(latestCompletedRegularSeasonWeek, REGULAR_SEASON_END_WEEK)) {
+    return;
+  }
+
+  const playoffMatchupsByWeek = await fetchMatchupsByWeek({
+    leagueId: config.sleeperLeagueId,
+    startWeek: playoffWeekStart,
+    endWeek: lastPlayoffWeek,
+  });
+  if (!isWeekScored(playoffMatchupsByWeek, lastPlayoffWeek)) {
+    return;
+  }
+
+  const [rosters, users, winnersBracket] = await Promise.all([
+    fetchJson(`https://api.sleeper.app/v1/league/${config.sleeperLeagueId}/rosters`),
+    fetchJson(`https://api.sleeper.app/v1/league/${config.sleeperLeagueId}/users`),
+    fetchJson(`https://api.sleeper.app/v1/league/${config.sleeperLeagueId}/winners_bracket`),
+  ]);
+  const playoffTeams =
+    Number(league?.settings?.playoff_teams) > 0
+      ? Number(league.settings.playoff_teams)
+      : 6;
+  const report = buildWeeklyReport({
+    league,
+    rosters,
+    users,
+    matchupsByWeek: regularSeasonMatchupsByWeek,
+    throughWeek: REGULAR_SEASON_END_WEEK,
+    regularSeasonEndWeek: REGULAR_SEASON_END_WEEK,
+    playoffTeams,
+    simulationCount: config.weeklyReportSimulationCount,
+  });
+
+  const allMatchupsByWeek = { ...regularSeasonMatchupsByWeek, ...playoffMatchupsByWeek };
+
+  const championshipRecap = buildChampionshipRecap({
+    league,
+    standings: report.standings,
+    winnersBracket,
+    matchupsByWeek: playoffMatchupsByWeek,
+    playoffWeekStart,
+  });
+  const seasonRecap = buildSeasonRecap({
+    league,
+    standings: report.standings,
+    winnersBracket,
+    matchupsByWeek: allMatchupsByWeek,
+    playoffWeekStart,
+    lastPlayoffWeek,
+  });
+
+  if (!championshipRecap) {
+    console.log("Playoff recap skipped: championship results unavailable.");
+    return;
+  }
+
+  if (config.dryRun) {
+    console.log(`[Dry Run] ${championshipRecap.textMessage}`);
+    if (seasonRecap) {
+      console.log(`[Dry Run] ${seasonRecap.textMessage}`);
+    }
+    return;
+  }
+
+  await sendChatMessage(championshipRecap.textMessage, "championship recap");
+
+  // Season recap is a best-effort second message, mirroring the existing
+  // weekly-report/recap pattern (a recap failure must not block
+  // markWeeklyReportSent for the championship message that already sent).
+  if (seasonRecap) {
+    try {
+      await sendChatMessage(seasonRecap.textMessage, "season recap");
+    } catch (error) {
+      console.warn("Season recap send failed.");
+      console.warn(error.message);
+    }
+  }
+
+  markWeeklyReportSent(playoffRecapState, {
+    season,
+    week: lastPlayoffWeek,
+    leagueId: config.sleeperLeagueId,
+  });
+  await savePlayoffRecapState(playoffRecapState);
 }
 
 async function pollForDraftPreview(draftPreviewState) {
@@ -2058,6 +2469,100 @@ async function saveBigMatchupsState(state) {
 
   await fs.writeFile(
     BIG_MATCHUPS_STATE_FILE,
+    JSON.stringify(serialized, null, 2),
+    "utf8"
+  );
+}
+
+async function loadPlayoffBracketState() {
+  await fs.mkdir(STATE_DIR, { recursive: true });
+
+  try {
+    const fileContents = await fs.readFile(PLAYOFF_BRACKET_STATE_FILE, "utf8");
+    const parsed = parseJsonFile(fileContents);
+
+    return {
+      sentBySeason: parsed?.sentBySeason ?? {},
+      baselinedSeason: parsed?.baselinedSeason ?? null,
+    };
+  } catch (error) {
+    return { sentBySeason: {}, baselinedSeason: null };
+  }
+}
+
+async function savePlayoffBracketState(state) {
+  await fs.mkdir(STATE_DIR, { recursive: true });
+
+  const serialized = {
+    updatedAt: new Date().toISOString(),
+    sentBySeason: state.sentBySeason ?? {},
+    baselinedSeason: state.baselinedSeason ?? null,
+  };
+
+  await fs.writeFile(
+    PLAYOFF_BRACKET_STATE_FILE,
+    JSON.stringify(serialized, null, 2),
+    "utf8"
+  );
+}
+
+async function loadPlayoffWeeklyState() {
+  await fs.mkdir(STATE_DIR, { recursive: true });
+
+  try {
+    const fileContents = await fs.readFile(PLAYOFF_WEEKLY_STATE_FILE, "utf8");
+    const parsed = parseJsonFile(fileContents);
+
+    return {
+      sentBySeason: parsed?.sentBySeason ?? {},
+      baselinedSeason: parsed?.baselinedSeason ?? null,
+    };
+  } catch (error) {
+    return { sentBySeason: {}, baselinedSeason: null };
+  }
+}
+
+async function savePlayoffWeeklyState(state) {
+  await fs.mkdir(STATE_DIR, { recursive: true });
+
+  const serialized = {
+    updatedAt: new Date().toISOString(),
+    sentBySeason: state.sentBySeason ?? {},
+    baselinedSeason: state.baselinedSeason ?? null,
+  };
+
+  await fs.writeFile(
+    PLAYOFF_WEEKLY_STATE_FILE,
+    JSON.stringify(serialized, null, 2),
+    "utf8"
+  );
+}
+
+async function loadPlayoffRecapState() {
+  await fs.mkdir(STATE_DIR, { recursive: true });
+
+  try {
+    const fileContents = await fs.readFile(PLAYOFF_RECAP_STATE_FILE, "utf8");
+    const parsed = parseJsonFile(fileContents);
+
+    return {
+      sentBySeason: parsed?.sentBySeason ?? {},
+    };
+  } catch (error) {
+    return { sentBySeason: {} };
+  }
+}
+
+async function savePlayoffRecapState(state) {
+  await fs.mkdir(STATE_DIR, { recursive: true });
+
+  const serialized = {
+    updatedAt: new Date().toISOString(),
+    sentBySeason: state.sentBySeason ?? {},
+  };
+
+  await fs.writeFile(
+    PLAYOFF_RECAP_STATE_FILE,
     JSON.stringify(serialized, null, 2),
     "utf8"
   );

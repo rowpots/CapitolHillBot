@@ -80,6 +80,10 @@ These are the important ones:
 - `BIG_MATCHUPS_SEND_HOUR_ET` / `BIG_MATCHUPS_SEND_MINUTE_ET`: Thursday send time in Eastern time, default `19:45`
 - `DRAFT_PREVIEW_ENABLED`: one-time rookie draft preview, `true` or `false`, default `true`
 - `DRAFT_PREVIEW_LEAD_HOURS`: hours before the draft's start time to send the preview, default `48`
+- `PLAYOFF_BRACKET_REVEAL_ENABLED`: one-time playoff bracket reveal, `true` or `false`, default `true`
+- `PLAYOFF_WEEKLY_REPORT_ENABLED`: weekly playoff results+preview (weeks 15-17), `true` or `false`, default `true`
+- `PLAYOFF_WEEKLY_REPORT_SEND_HOUR_ET` / `PLAYOFF_WEEKLY_REPORT_SEND_MINUTE_ET`: Thursday send time in Eastern time, default `19:45`
+- `PLAYOFF_RECAP_ENABLED`: championship + season recap, `true` or `false`, default `true`
 - `HEADLESS`: `false` is easier for debugging
 - `DRY_RUN`: `true` logs instead of sending to Snapchat
 - `RUN_ONCE`: `true` checks once and exits
@@ -442,6 +446,111 @@ npm run preview-draft-preview
 Add `--send` to push it to the test chat. There's no `--previous` replay mode here — a past
 draft's "available rookies" aren't rookies/available anymore, so replaying an old season wouldn't
 mean anything useful.
+
+## Playoffs
+
+Four messages covering the 3-round, 6-team playoff bracket (weeks 15-17). All of them wait until
+the regular season is fully complete before trusting Sleeper's bracket data — the bracket
+endpoint returns a meaningless placeholder until then.
+
+**Playoff Bracket Reveal** — one-time, sent the Tuesday right after the regular season ends.
+The full bracket: every seed, who has a bye, Round 1's matchups, and the projected path through
+Round 2 and the Championship.
+
+```text
+🏆 Capitol Hill Playoff Bracket
+———————————————————————————
+
+6 teams, 3 rounds. Round 1 kicks off Week 15.
+
+Seed 1: The Bad Man (11-3) — BYE
+Seed 2: JoshPT (10-4) — BYE
+Seed 3: Alexandria Ocasio-Cortez (9-5)
+Seed 4: DrtyBubble (9-5)
+Seed 5: Emmauel Macron (9-5)
+Seed 6: Team Ayahuasca 🗿 (7-7)
+
+Round 1 (Week 15)
+Seed 4 DrtyBubble vs. Seed 5 Emmauel Macron
+Seed 6 Team Ayahuasca 🗿 vs. Seed 3 Alexandria Ocasio-Cortez
+
+Round 2 (Week 16, projected)
+Game A: Seed 1 The Bad Man vs. Winner of (Seed 4 DrtyBubble vs Seed 5 Emmauel Macron)
+Game B: Seed 2 JoshPT vs. Winner of (Seed 6 Team Ayahuasca 🗿 vs Seed 3 Alexandria Ocasio-Cortez)
+5th/6th Place: Loser of (Seed 4 DrtyBubble vs Seed 5 Emmauel Macron) vs. Loser of (Seed 6 Team Ayahuasca 🗿 vs Seed 3 Alexandria Ocasio-Cortez)
+
+Round 3 (Week 17, projected)
+Championship: Winner of Game A vs. Winner of Game B
+3rd Place: Loser of Game A vs. Loser of Game B
+```
+
+**Weekly Playoff Report** — Thursday evenings, weeks 15-17. Week 15 is a preview only; weeks 16
+and 17 lead with the previous week's results before previewing what's next.
+
+```text
+🏈 Capitol Hill Week 17 Playoffs
+———————————————————————————
+
+Round 2 Results
+The Bad Man def. Emmauel Macron by 34.7
+Alexandria Ocasio-Cortez def. JoshPT by 64.5
+Team Ayahuasca 🗿 def. DrtyBubble by 9.3 (5th Place)
+
+🏆 The Bad Man and Alexandria Ocasio-Cortez are headed to the Championship!
+🥉 Emmauel Macron and JoshPT will play for 3rd Place.
+
+Championship (this week)
+The Bad Man vs. Alexandria Ocasio-Cortez
+
+3rd Place Game (this week)
+Emmauel Macron vs. JoshPT
+```
+
+**Championship + Season Recap** — sent back-to-back the Tuesday after the championship week
+finishes. The Championship Recap crowns the champion and reports 3rd place; the Season Recap is
+the full final standings (1st-12th) plus season-long superlatives.
+
+```text
+🏆 Capitol Hill Champion
+———————————————————————————
+
+🥇 The Bad Man is your champion! (129.6 - 125.1 over Alexandria Ocasio-Cortez)
+
+🥉 3rd Place: JoshPT def. Emmauel Macron by 76.1
+```
+
+```text
+📋 Capitol Hill Final Standings — Season Recap
+
+1. The Bad Man (Champion)
+2. Alexandria Ocasio-Cortez (Runner-up)
+...
+12. Jme33708 (0-14)
+
+Season Superlatives
+🔥 Highest Score: The Bad Man — 186.3 (Wk 9)
+🧊 Lowest Score: Jme33708 — 27.0 (Wk 12)
+💥 Biggest Blowout: JoshPT def. Jme33708 by 137.3 (Wk 12)
+🏃 Longest Win Streak: Alexandria Ocasio-Cortez — 7 games
+```
+
+Toggle each independently with `PLAYOFF_BRACKET_REVEAL_ENABLED`, `PLAYOFF_WEEKLY_REPORT_ENABLED`,
+and `PLAYOFF_RECAP_ENABLED`.
+
+Preview the Bracket Reveal and Championship/Season Recap (no Snapchat, replays a finished season):
+
+```bash
+npm run preview-playoff-bracket -- --previous
+```
+
+Add `--type=reveal` or `--type=recap` to preview just one, and `--send` to push it to the test
+chat. Preview the weekly report:
+
+```bash
+npm run preview-playoff-weekly-report -- --previous
+```
+
+Add `--week 15|16|17 --send` to push one specific week to the test chat.
 
 ## Trade Message Format
 

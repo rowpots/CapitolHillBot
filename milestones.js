@@ -490,13 +490,13 @@ function mergeSeasonRecords(book, { season, rosters, users, matchupsByWeek, thro
   }
 }
 
-function realWeekScores(matchupsByWeek, week) {
+export function realWeekScores(matchupsByWeek, week) {
   return normalizeWeekEntries(matchupsByWeek?.[week] ?? []).filter(
     (entry) => entry.points > 0 && entry.matchupId > 0
   );
 }
 
-function realWeekMatchups(matchupsByWeek, week) {
+export function realWeekMatchups(matchupsByWeek, week) {
   const grouped = groupWeekEntriesByMatchup(realWeekScores(matchupsByWeek, week));
   const matchups = [];
 
@@ -517,7 +517,7 @@ function realWeekMatchups(matchupsByWeek, week) {
   return matchups;
 }
 
-function longestWinStreakForSeason(matchupsByWeek, throughWeek, labelFor) {
+export function longestWinStreakForSeason(matchupsByWeek, throughWeek, labelFor) {
   const sequences = new Map();
 
   for (let week = 1; week <= throughWeek; week += 1) {
