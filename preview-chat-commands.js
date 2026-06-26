@@ -8,15 +8,25 @@
 //   node preview-chat-commands.js --send        (test chat, actually reply)
 //   node preview-chat-commands.js --main        (use SNAPCHAT_GROUP_CHAT_ID)
 //   node preview-chat-commands.js --chat-id <id>
+import path from "path";
+import { fileURLToPath } from "url";
+
 import dotenv from "dotenv";
 
 import { describeError, installTimestampedConsole } from "./logging.js";
 import SnapBot from "./snapbot.js";
 import { buildHallOfFameReport } from "./hall-of-fame.js";
+import { buildPowerRankings, findLatestCompletedWeek } from "./weekly-report.js";
+import { loadDynastyValueBook } from "./dynasty-values.js";
 import {
   buildHelpMessage,
+  buildMatchupPairings,
+  buildPlayerNameIndex,
   buildStandingsFromRosters,
   buildTeamRecordMessage,
+  buildTradeEvaluationMessage,
+  filterMatchupPairings,
+  formatMatchupsMessage,
   formatStandingsMessage,
   parseCommand,
 } from "./chat-commands.js";
@@ -24,6 +34,8 @@ import {
 dotenv.config();
 installTimestampedConsole();
 
+const STATE_DIR = path.join(path.dirname(fileURLToPath(import.meta.url)), ".state");
+const REGULAR_SEASON_END_WEEK = 14;
 const args = parseArgs(process.argv.slice(2));
 const prefix = process.env.CHAT_COMMAND_PREFIX?.trim() || "!";
 const credentials = {
@@ -115,6 +127,33 @@ async function buildCommandReply(parsed, leagueId) {
       return buildTeamRecordMessage({ leagueName, teams, query: parsed.argString, prefix, seasonNote });
     }
 
+    case "power":
+      return (await resolvePowerRankings(league, leagueId)) ?? "Power rankings aren't available yet.";
+
+    case "matchup":
+      return (await resolveMatchups(league, leagueId, parsed.argString)) ?? "No matchups to show right now.";
+
+    case "trade": {
+      const [playersById, valueBook] = await Promise.all([
+        fetchJson("https://api.sleeper.app/v1/players/nfl"),
+        loadDynastyValueBook({
+          cacheDir: STATE_DIR,
+          preferredMode: process.env.DYNASTY_VALUE_MODE?.trim() || "auto",
+          league,
+          logger: console,
+        }).catch(() => null),
+      ]);
+      if (!valueBook) {
+        return "Trade values are unavailable right now — try again later.";
+      }
+      return buildTradeEvaluationMessage({
+        argString: parsed.argString,
+        playerIndex: buildPlayerNameIndex(playersById),
+        valueBook,
+        prefix,
+      });
+    }
+
     case "hof": {
       const hallOfFame = await loadHallOfFameSnapshot(leagueId);
       if (!hallOfFame) {
@@ -164,6 +203,130 @@ async function resolveStandings(league, leagueId) {
     console.warn("Standings offseason fallback failed.");
   }
   return { teams, seasonNote: null };
+}
+
+// Same as index.js resolvePowerRankings.
+async function resolvePowerRankings(league, leagueId) {
+  const current = await buildPowerRankingsTextForLeague(leagueId, league);
+  if (current) return current;
+
+  const previousLeagueId = String(league?.previous_league_id ?? "").trim();
+  if (!previousLeagueId || previousLeagueId === "0") return null;
+  const previousLeague = await fetchJson(`https://api.sleeper.app/v1/league/${previousLeagueId}`);
+  const season = String(previousLeague?.season ?? "").trim();
+  return buildPowerRankingsTextForLeague(previousLeagueId, previousLeague, season ? `${season} final` : "last season");
+}
+
+async function buildPowerRankingsTextForLeague(leagueId, league, seasonNote = null) {
+  const matchupsByWeek = await fetchMatchupsByWeek(leagueId, 1, REGULAR_SEASON_END_WEEK);
+  const latestCompletedWeek = findLatestCompletedWeek(matchupsByWeek, REGULAR_SEASON_END_WEEK);
+  if (latestCompletedWeek < 1) return null;
+  const [rosters, users] = await Promise.all([
+    fetchJson(`https://api.sleeper.app/v1/league/${leagueId}/rosters`),
+    fetchJson(`https://api.sleeper.app/v1/league/${leagueId}/users`),
+  ]);
+  const report = buildPowerRankings({
+    league,
+    rosters,
+    users,
+    matchupsByWeek,
+    throughWeek: latestCompletedWeek,
+    week: latestCompletedWeek,
+  });
+  if (!report) return null;
+  return seasonNote ? `(${seasonNote})\n${report.textMessage}` : report.textMessage;
+}
+
+// Same as index.js resolveMatchups.
+async function resolveMatchups(league, leagueId, teamQuery) {
+  const leagueName = String(league?.name ?? "League").trim() || "League";
+  const nflState = await fetchJson("https://api.sleeper.app/v1/state/nfl").catch(() => null);
+  const currentWeek = Number(nflState?.week) || 0;
+
+  if (currentWeek >= 1) {
+    const matchups = await fetchJson(
+      `https://api.sleeper.app/v1/league/${leagueId}/matchups/${currentWeek}`
+    ).catch(() => []);
+    const reply = await formatMatchupsForLeague({
+      leagueId,
+      leagueName,
+      week: currentWeek,
+      matchups,
+      teamQuery,
+      allowEmptyFallback: true,
+    });
+    if (reply) return reply;
+  }
+
+  const here = await latestMatchupsForLeague(leagueId);
+  if (here) {
+    return formatMatchupsForLeague({ leagueId, leagueName, ...here, teamQuery });
+  }
+
+  const previousLeagueId = String(league?.previous_league_id ?? "").trim();
+  if (previousLeagueId && previousLeagueId !== "0") {
+    const previousLeague = await fetchJson(`https://api.sleeper.app/v1/league/${previousLeagueId}`);
+    const there = await latestMatchupsForLeague(previousLeagueId);
+    if (there) {
+      const season = String(previousLeague?.season ?? "").trim();
+      return formatMatchupsForLeague({
+        leagueId: previousLeagueId,
+        leagueName,
+        ...there,
+        teamQuery,
+        seasonNote: season ? `${season} wk ${there.week}` : "last season",
+      });
+    }
+  }
+  return null;
+}
+
+async function latestMatchupsForLeague(leagueId) {
+  const matchupsByWeek = await fetchMatchupsByWeek(leagueId, 1, 17);
+  for (let week = 17; week >= 1; week -= 1) {
+    const matchups = matchupsByWeek[week] ?? [];
+    if (matchups.some((entry) => Number(entry?.points) > 0)) {
+      return { week, matchups };
+    }
+  }
+  return null;
+}
+
+async function formatMatchupsForLeague({
+  leagueId,
+  leagueName,
+  week,
+  matchups,
+  teamQuery,
+  seasonNote = null,
+  allowEmptyFallback = false,
+}) {
+  const [rosters, users] = await Promise.all([
+    fetchJson(`https://api.sleeper.app/v1/league/${leagueId}/rosters`),
+    fetchJson(`https://api.sleeper.app/v1/league/${leagueId}/users`),
+  ]);
+  const allPairings = buildMatchupPairings({ matchups, rosters, users });
+  if (allPairings.length === 0) {
+    return allowEmptyFallback ? null : "No matchups to show right now.";
+  }
+  const pairings = filterMatchupPairings(allPairings, teamQuery);
+  if (pairings.length === 0) {
+    return `No matchup found for "${teamQuery}".`;
+  }
+  return formatMatchupsMessage({ leagueName, weekLabel: `Week ${week}`, pairings, seasonNote });
+}
+
+async function fetchMatchupsByWeek(leagueId, startWeek, endWeek) {
+  const weeks = Array.from({ length: endWeek - startWeek + 1 }, (_, i) => startWeek + i);
+  const results = await Promise.all(
+    weeks.map(async (week) => {
+      const matchups = await fetchJson(
+        `https://api.sleeper.app/v1/league/${leagueId}/matchups/${week}`
+      ).catch(() => []);
+      return [week, Array.isArray(matchups) ? matchups : []];
+    })
+  );
+  return Object.fromEntries(results);
 }
 
 async function loadHallOfFameSnapshot(leagueId) {

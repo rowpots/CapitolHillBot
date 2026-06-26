@@ -282,9 +282,23 @@ but ground-truth); `--from-cache` instantly renders whatever is already in
 
 `chat-commands.js` + `pollForChatCommands` (index.js, last in the main loop). Members type
 `!command` in the group chat; the bot reads the chat, parses commands, and replies by reusing the
-same builders as its scheduled posts. Commands: `!help`, `!standings`, `!record <team>`, `!hof`
-(registry in `chat-commands.js` COMMANDS — add an entry there *and* a case in both `buildCommandReply`
-in index.js and preview-chat-commands.js).
+same builders as its scheduled posts. Commands: `!help`, `!standings`, `!record <team>`, `!power`,
+`!matchup [team]`, `!trade <a> for <b>`, `!hof` (registry in `chat-commands.js` COMMANDS — add an
+entry there *and* a case in both `buildCommandReply` in index.js and preview-chat-commands.js).
+`!power` reuses `buildPowerRankings` (same offseason fallback as standings); `!matchup` shows the
+current NFL week's games (one fetch via `/state/nfl`), falling back to the most recent scored week
+in this or the previous league; `!trade <players> for <players>` resolves names against the Sleeper
+player map (`buildPlayerNameIndex`, picks the highest-dynasty-value namesake), sums DynastyProcess
+values per side, and grades with the same thresholds as the live trade engine.
+
+- `buildMatchupPairings` builds *all* of a week's pairings; `filterMatchupPairings` narrows to one
+  team separately, so the resolver can tell "no schedule this week" (empty build → fall through to
+  the previous-season fallback via `allowEmptyFallback`) apart from "that team isn't playing" (empty
+  filter → "No matchup found for X"). The `currentWeek >= 1` branch must therefore drop through when
+  it yields zero pairings (e.g. preseason rows with null `matchup_id`) instead of dead-ending.
+- `!trade` name resolution guards the empty-normalized-name case (e.g. a bare "Jr"): both the index
+  build and `resolvePlayer` skip an empty key, since the loose `startsWith` fallback would otherwise
+  match every player and resolve to the single highest-value one.
 
 - **Reading**: `snapbot.readChatMessages(chatId)` scrapes `#cv-<chatId>` (container class `MibAa`),
   one `li.T1yt2` per sender-block. Sender name comes from `header .nonIntl` and is **carried forward**

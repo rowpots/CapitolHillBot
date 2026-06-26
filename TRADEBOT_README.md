@@ -651,6 +651,10 @@ League members can type commands right in the group chat and the bot replies. Co
 - `!help` — list the available commands
 - `!standings` — current league standings (in the offseason, shows last season's final standings)
 - `!record <team>` — a team's record, points, and rank (e.g. `!record JoshPT`)
+- `!power` — power rankings
+- `!matchup [team]` — this week's matchups (optionally just one team's)
+- `!trade <players> for <players>` — grades a hypothetical trade by DynastyProcess value
+  (e.g. `!trade Lamar Jackson for Jayden Daniels`)
 - `!hof` — the all-time Hall of Fame
 
 The bot listens in the main group chat by default; set `CHAT_COMMANDS_CHAT_ID` to listen elsewhere.

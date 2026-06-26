@@ -57,9 +57,14 @@ import {
 } from "./playoffs.js";
 import {
   buildHelpMessage,
+  buildMatchupPairings,
+  buildPlayerNameIndex,
   buildStandingsFromRosters,
   buildTeamRecordMessage,
+  buildTradeEvaluationMessage,
   commandSignature,
+  filterMatchupPairings,
+  formatMatchupsMessage,
   formatStandingsMessage,
   parseCommand,
 } from "./chat-commands.js";
@@ -1667,6 +1672,33 @@ async function buildCommandReply(parsed) {
       });
     }
 
+    case "power":
+      return (await resolvePowerRankings(league)) ?? "Power rankings aren't available yet.";
+
+    case "matchup":
+      return (await resolveMatchups(league, parsed.argString)) ?? "No matchups to show right now.";
+
+    case "trade": {
+      const [playersById, valueBook] = await Promise.all([
+        loadPlayersById(),
+        loadDynastyValueBook({
+          cacheDir: STATE_DIR,
+          preferredMode: config.dynastyValueMode,
+          league,
+          logger: console,
+        }).catch(() => null),
+      ]);
+      if (!valueBook) {
+        return "Trade values are unavailable right now — try again later.";
+      }
+      return buildTradeEvaluationMessage({
+        argString: parsed.argString,
+        playerIndex: buildPlayerNameIndex(playersById),
+        valueBook,
+        prefix: config.chatCommandPrefix,
+      });
+    }
+
     case "hof": {
       const hallOfFame = await loadHallOfFameState();
       if (!hallOfFame?.seededFromHistory) {
@@ -1725,6 +1757,152 @@ async function resolveStandings(league) {
   }
 
   return { teams, seasonNote: null };
+}
+
+// Power rankings for the !power command, with the same offseason fallback as
+// standings: if the current season has no completed weeks, rank the previous
+// season instead (labeled).
+async function resolvePowerRankings(league) {
+  const current = await buildPowerRankingsTextForLeague(config.sleeperLeagueId, league);
+  if (current) {
+    return current;
+  }
+
+  const previousLeagueId = String(league?.previous_league_id ?? "").trim();
+  if (!previousLeagueId || previousLeagueId === "0") {
+    return null;
+  }
+  const previousLeague = await fetchJson(
+    `https://api.sleeper.app/v1/league/${previousLeagueId}`
+  );
+  const season = String(previousLeague?.season ?? "").trim();
+  return buildPowerRankingsTextForLeague(
+    previousLeagueId,
+    previousLeague,
+    season ? `${season} final` : "last season"
+  );
+}
+
+async function buildPowerRankingsTextForLeague(leagueId, league, seasonNote = null) {
+  const matchupsByWeek = await fetchMatchupsByWeek({
+    leagueId,
+    startWeek: 1,
+    endWeek: REGULAR_SEASON_END_WEEK,
+  });
+  const latestCompletedWeek = findLatestCompletedWeek(matchupsByWeek, REGULAR_SEASON_END_WEEK);
+  if (latestCompletedWeek < 1) {
+    return null;
+  }
+
+  const [rosters, users] = await Promise.all([
+    fetchJson(`https://api.sleeper.app/v1/league/${leagueId}/rosters`),
+    fetchJson(`https://api.sleeper.app/v1/league/${leagueId}/users`),
+  ]);
+  const report = buildPowerRankings({
+    league,
+    rosters,
+    users,
+    matchupsByWeek,
+    throughWeek: latestCompletedWeek,
+    week: latestCompletedWeek,
+  });
+  if (!report) {
+    return null;
+  }
+  return seasonNote ? `(${seasonNote})\n${report.textMessage}` : report.textMessage;
+}
+
+// Matchups for the !matchup command. In-season, shows the current NFL week's
+// games (one fetch). Offseason / no current games: falls back to the most recent
+// completed week in this league, then the previous league.
+async function resolveMatchups(league, teamQuery) {
+  const leagueName = String(league?.name ?? "League").trim() || "League";
+
+  const nflState = await fetchJson("https://api.sleeper.app/v1/state/nfl").catch(() => null);
+  const currentWeek = Number(nflState?.week) || 0;
+
+  if (currentWeek >= 1) {
+    const matchups = await fetchJson(
+      `https://api.sleeper.app/v1/league/${config.sleeperLeagueId}/matchups/${currentWeek}`
+    ).catch(() => []);
+    // allowEmptyFallback: if the "current" week has no real schedule yet
+    // (preseason rows with null matchup_id), return null so we drop through to
+    // the most-recent-scored-week fallback instead of dead-ending.
+    const reply = await formatMatchupsForLeague({
+      leagueId: config.sleeperLeagueId,
+      leagueName,
+      week: currentWeek,
+      matchups,
+      teamQuery,
+      allowEmptyFallback: true,
+    });
+    if (reply) {
+      return reply;
+    }
+  }
+
+  // Fallback: scan for the most recent week that actually has results.
+  const here = await latestMatchupsForLeague(config.sleeperLeagueId);
+  if (here) {
+    return formatMatchupsForLeague({ leagueId: config.sleeperLeagueId, leagueName, ...here, teamQuery });
+  }
+
+  const previousLeagueId = String(league?.previous_league_id ?? "").trim();
+  if (previousLeagueId && previousLeagueId !== "0") {
+    const previousLeague = await fetchJson(
+      `https://api.sleeper.app/v1/league/${previousLeagueId}`
+    );
+    const there = await latestMatchupsForLeague(previousLeagueId);
+    if (there) {
+      const season = String(previousLeague?.season ?? "").trim();
+      return formatMatchupsForLeague({
+        leagueId: previousLeagueId,
+        leagueName,
+        ...there,
+        teamQuery,
+        seasonNote: season ? `${season} wk ${there.week}` : "last season",
+      });
+    }
+  }
+
+  return null;
+}
+
+async function latestMatchupsForLeague(leagueId) {
+  // Scan through the playoffs (week 17) for the last week with scored data.
+  const matchupsByWeek = await fetchMatchupsByWeek({ leagueId, startWeek: 1, endWeek: 17 });
+  for (let week = 17; week >= 1; week -= 1) {
+    const matchups = matchupsByWeek[week] ?? [];
+    if (matchups.some((entry) => Number(entry?.points) > 0)) {
+      return { week, matchups };
+    }
+  }
+  return null;
+}
+
+async function formatMatchupsForLeague({
+  leagueId,
+  leagueName,
+  week,
+  matchups,
+  teamQuery,
+  seasonNote = null,
+  allowEmptyFallback = false,
+}) {
+  const [rosters, users] = await Promise.all([
+    fetchJson(`https://api.sleeper.app/v1/league/${leagueId}/rosters`),
+    fetchJson(`https://api.sleeper.app/v1/league/${leagueId}/users`),
+  ]);
+  const allPairings = buildMatchupPairings({ matchups, rosters, users });
+  if (allPairings.length === 0) {
+    // No schedule for this week at all -- let the caller fall back if it can.
+    return allowEmptyFallback ? null : "No matchups to show right now.";
+  }
+  const pairings = filterMatchupPairings(allPairings, teamQuery);
+  if (pairings.length === 0) {
+    return `No matchup found for "${teamQuery}".`;
+  }
+  return formatMatchupsMessage({ leagueName, weekLabel: `Week ${week}`, pairings, seasonNote });
 }
 
 async function refreshMilestones({

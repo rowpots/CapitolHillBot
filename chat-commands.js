@@ -9,6 +9,8 @@ import {
   DEFAULT_TEAM_NAME_MAX_LENGTH,
   formatOneDecimal,
   formatRosterLabel,
+  groupWeekEntriesByMatchup,
+  normalizeWeekEntries,
   STANDINGS_DIVIDER,
   truncateLabel,
 } from "./weekly-report.js";
@@ -22,6 +24,9 @@ export const COMMANDS = [
   { name: "help", usage: "help", description: "List the commands you can use" },
   { name: "standings", usage: "standings", description: "Current league standings" },
   { name: "record", usage: "record <team>", description: "A team's record + rank" },
+  { name: "power", usage: "power", description: "Power rankings" },
+  { name: "matchup", usage: "matchup [team]", description: "This week's matchups" },
+  { name: "trade", usage: "trade <a> for <b>", description: "Grade a hypothetical trade" },
   { name: "hof", usage: "hof", description: "All-time Hall of Fame" },
 ];
 
@@ -153,6 +158,259 @@ function formatRecord(team) {
   return team.ties > 0
     ? `${team.wins}-${team.losses}-${team.ties}`
     : `${team.wins}-${team.losses}`;
+}
+
+// ---- !matchup -------------------------------------------------------------
+
+// Turns a raw Sleeper matchups array into head-to-head pairings with labels and
+// points. Returns *all* pairings for the week; filtering to one team is a
+// separate step (filterMatchupPairings) so callers can tell "no schedule this
+// week at all" (empty here) apart from "that team isn't playing" (empty filter).
+export function buildMatchupPairings({ matchups, rosters, users }) {
+  const rosterLookup = buildRosterLookup(rosters);
+  const userLookup = buildUserLookup(users);
+  const grouped = groupWeekEntriesByMatchup(normalizeWeekEntries(matchups ?? []));
+
+  const pairings = [];
+  for (const pair of grouped.values()) {
+    if (pair.length !== 2) {
+      continue;
+    }
+    const sides = pair
+      .map((entry) => ({
+        label: formatRosterLabel(entry.rosterId, rosterLookup, userLookup),
+        points: entry.points,
+      }))
+      .sort((a, b) => b.points - a.points);
+    pairings.push({ a: sides[0], b: sides[1] });
+  }
+
+  return pairings;
+}
+
+// Narrows pairings to the one involving a named team (substring, case-
+// insensitive). An empty query returns every pairing unchanged.
+export function filterMatchupPairings(pairings, teamQuery = "") {
+  const needle = String(teamQuery).trim().toLowerCase();
+  if (!needle) {
+    return pairings;
+  }
+  return pairings.filter(
+    (pairing) =>
+      pairing.a.label.toLowerCase().includes(needle) ||
+      pairing.b.label.toLowerCase().includes(needle)
+  );
+}
+
+export function formatMatchupsMessage({ leagueName = "League", weekLabel, pairings, seasonNote = null }) {
+  if (!pairings || pairings.length === 0) {
+    return "No matchups to show right now.";
+  }
+
+  const header = `🏈 ${leagueName} — ${weekLabel}${seasonNote ? ` (${seasonNote})` : ""}`;
+  // When the week is still being played every team shows 0.0, so only print
+  // scores once at least one point has been posted.
+  const anyScored = pairings.some((p) => p.a.points > 0 || p.b.points > 0);
+
+  const lines = pairings.map((pairing) => {
+    const a = truncateLabel(pairing.a.label, DEFAULT_TEAM_NAME_MAX_LENGTH);
+    const b = truncateLabel(pairing.b.label, DEFAULT_TEAM_NAME_MAX_LENGTH);
+    if (!anyScored) {
+      return `${a}  vs  ${b}`;
+    }
+    return `${a}  ${formatOneDecimal(pairing.a.points)} — ${formatOneDecimal(pairing.b.points)}  ${b}`;
+  });
+
+  return [header, dividerFor(header), "", lines.join("\n")].join("\n");
+}
+
+// ---- !trade ---------------------------------------------------------------
+
+// Splits "!trade A, B for C" into { sideA: ["A","B"], sideB: ["C"] }. Accepts
+// " for ", "|", or "/" between the two sides and comma / "+" within a side.
+export function parseTradeCommand(argString) {
+  const raw = String(argString ?? "").trim();
+  if (!raw) {
+    return null;
+  }
+
+  const parts = raw.split(/\s+for\s+|\s*\|\s*|\s+\/\s+/i);
+  if (parts.length !== 2) {
+    return null;
+  }
+
+  const splitSide = (side) =>
+    side
+      .split(/\s*,\s*|\s+\+\s+/)
+      .map((name) => name.trim())
+      .filter(Boolean);
+
+  const sideA = splitSide(parts[0]);
+  const sideB = splitSide(parts[1]);
+  if (sideA.length === 0 || sideB.length === 0) {
+    return null;
+  }
+  return { sideA, sideB };
+}
+
+// Builds a normalized-name -> [player, ...] index from Sleeper's players map for
+// fuzzy `!trade` lookups. Only keeps players with a fantasy-relevant position.
+export function buildPlayerNameIndex(playersById) {
+  const FANTASY_POSITIONS = new Set(["QB", "RB", "WR", "TE", "K", "DEF"]);
+  const index = new Map();
+
+  for (const id of Object.keys(playersById ?? {})) {
+    const player = playersById[id];
+    if (!player) {
+      continue;
+    }
+    const position = String(player.position ?? "").toUpperCase();
+    if (!FANTASY_POSITIONS.has(position)) {
+      continue;
+    }
+    const fullName =
+      player.full_name || [player.first_name, player.last_name].filter(Boolean).join(" ");
+    if (!fullName) {
+      continue;
+    }
+    const key = normalizePlayerName(fullName);
+    if (!key) {
+      continue;
+    }
+    if (!index.has(key)) {
+      index.set(key, []);
+    }
+    index.get(key).push({ id, ...player, displayName: fullName });
+  }
+
+  return index;
+}
+
+function normalizePlayerName(name) {
+  return String(name)
+    .toLowerCase()
+    .replace(/[.'`]/g, "")
+    .replace(/\b(jr|sr|ii|iii|iv|v)\b/g, "")
+    .replace(/[^a-z0-9 ]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+// Resolves a free-text name to a single player, preferring an exact normalized
+// match and, among same-name players, the one with the highest dynasty value
+// (so "Lamar Jackson" lands on the QB, not an obscure namesake).
+function resolvePlayer(name, index, valueBook) {
+  const key = normalizePlayerName(name);
+  if (!key) {
+    // A name that normalizes to nothing (e.g. just "Jr") would otherwise make
+    // the loose fallback's startsWith("") match every player.
+    return null;
+  }
+  let candidates = index.get(key);
+
+  if (!candidates || candidates.length === 0) {
+    // Loose fallback: a unique key that starts with / contains the query.
+    const keys = [...index.keys()].filter((k) => k.startsWith(key) || k.includes(key));
+    if (keys.length > 0) {
+      candidates = keys.flatMap((k) => index.get(k));
+    }
+  }
+  if (!candidates || candidates.length === 0) {
+    return null;
+  }
+
+  return candidates
+    .map((player) => ({ player, value: valueBook?.getPlayerValue(player) ?? null }))
+    .sort((a, b) => (b.value ?? -1) - (a.value ?? -1))[0].player;
+}
+
+export function buildTradeEvaluationMessage({ argString, playerIndex, valueBook, prefix = DEFAULT_COMMAND_PREFIX }) {
+  const parsed = parseTradeCommand(argString);
+  if (!parsed) {
+    return `Usage: ${prefix}trade <players> for <players>  —  e.g. ${prefix}trade Lamar Jackson for Jayden Daniels`;
+  }
+
+  const sideA = resolveSide(parsed.sideA, playerIndex, valueBook);
+  const sideB = resolveSide(parsed.sideB, playerIndex, valueBook);
+
+  const unresolved = [...sideA.unresolved, ...sideB.unresolved];
+  if (sideA.players.length === 0 || sideB.players.length === 0) {
+    const missing = unresolved.length ? ` Couldn't find: ${unresolved.join(", ")}.` : "";
+    return `I couldn't read both sides of that trade.${missing} Try full player names.`;
+  }
+
+  const lines = ["⚖️ Trade Check"];
+  lines.push(dividerFor(lines[0]));
+  lines.push(formatTradeSide("Side 1", sideA));
+  lines.push(formatTradeSide("Side 2", sideB));
+  lines.push("");
+
+  const baseline = Math.max((sideA.total + sideB.total) / 2, 1);
+  // Each side ends up holding the *other* side's package, so Side 1's value
+  // swing is what it receives (sideB) minus what it gives (sideA). The side that
+  // gives less value comes out ahead.
+  const side1Score = (sideB.total - sideA.total) / baseline;
+  const grade1 = gradeFromScore(side1Score).grade;
+  const grade2 = gradeFromScore(-side1Score).grade;
+
+  const diff = Math.round(Math.abs(sideB.total - sideA.total));
+  if (diff <= baseline * 0.05) {
+    lines.push(`Dead even — ${formatOneDecimal(sideA.total)} vs ${formatOneDecimal(sideB.total)}. Grades ${grade1}/${grade2}.`);
+  } else {
+    const winner = sideA.total < sideB.total ? "Side 1" : "Side 2";
+    lines.push(`${winner} comes out ahead by ${diff.toLocaleString()} in DynastyProcess value.`);
+    lines.push(`Grades — Side 1: ${grade1} · Side 2: ${grade2}`);
+  }
+
+  if (unresolved.length) {
+    lines.push("");
+    lines.push(`(Skipped unrecognized: ${unresolved.join(", ")})`);
+  }
+
+  return lines.join("\n");
+}
+
+function resolveSide(names, playerIndex, valueBook) {
+  const players = [];
+  const unresolved = [];
+  let total = 0;
+
+  for (const name of names) {
+    const player = resolvePlayer(name, playerIndex, valueBook);
+    if (!player) {
+      unresolved.push(name);
+      continue;
+    }
+    const value = valueBook?.getPlayerValue(player) ?? 0;
+    total += value;
+    players.push({ player, value });
+  }
+
+  return { players, unresolved, total };
+}
+
+function formatTradeSide(label, side) {
+  const parts = side.players.map((entry) => {
+    const meta = [entry.player.position, entry.player.team].filter(Boolean).join("-");
+    const valueLabel = entry.value > 0 ? ` (${Math.round(entry.value).toLocaleString()})` : "";
+    return `${entry.player.displayName}${meta ? ` [${meta}]` : ""}${valueLabel}`;
+  });
+  return `${label}: ${parts.join(", ")}  =  ${formatOneDecimal(side.total)}`;
+}
+
+// Same grade thresholds as the live trade engine's buildTradeGrade (index.js).
+// Duplicated here deliberately so the command stays self-contained until the
+// trade engine is extracted into its own module.
+function gradeFromScore(score) {
+  if (score >= 0.7) return { grade: "A+" };
+  if (score >= 0.45) return { grade: "A" };
+  if (score >= 0.25) return { grade: "A-" };
+  if (score >= 0.12) return { grade: "B+" };
+  if (score >= 0.05) return { grade: "B" };
+  if (score >= -0.05) return { grade: "C" };
+  if (score >= -0.12) return { grade: "C-" };
+  if (score >= -0.25) return { grade: "D" };
+  return { grade: "F" };
 }
 
 // A divider sized to the header but trimmed back, matching the other features'
