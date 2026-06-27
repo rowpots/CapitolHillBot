@@ -31,6 +31,15 @@ league chat is outward-facing — confirm before doing it.
   `hasSentWeeklyReport`/`markWeeklyReportSent` dedup, with the 2-14 window gate
   (`latestCompletedWeek < 1` skip / `> REGULAR_SEASON_END_WEEK` stop). Same code path that already
   fires live every Tuesday, so no separate live shakedown needed.
+- [x] **Division rivalry (Wed after wks 4/7/11/14)** — *promoted from Tier 2 on 2026-06-26.* Content
+  validated against real 2025 data across all four quarter boundaries
+  (`preview-division-rivalry --previous`): wk4 correctly skipped (no interdivision games yet — the
+  null-skip path), wks 7/11/14 full posts (series record, all-time tally, blowout/closest,
+  MVP/Bust). Confirmed the live league has divisions configured (Republicans/Democrats), so it will
+  actually fire. Scheduling reuses the **identical** proven machinery as the Tuesday report —
+  `isWeekdayAfterHourInEastern(…, "Wednesday", …)` + the same `hasSentWeeklyReport`/
+  `markWeeklyReportSent` dedup, gated to `RIVALRY_QUARTER_WEEKS`; all-time walk wrapped in try/catch.
+  No separate live shakedown needed.
 
 ---
 
@@ -43,9 +52,6 @@ enabled and `DRY_RUN=true` around the trigger, or do a one-off test-chat send to
 - [ ] **Milestone alerts (clinch/elim + record book)** — `npm run preview-milestones -- --previous`.
   Verify live: detection at a real week-final, drip release (one/cycle) across days, silent baseline
   on first run, Week ≥8 gate.
-- [ ] **Division rivalry (Wed after wks 4/7/11/14)** — `npm run preview-division-rivalry -- --previous`.
-  Verify live: Wednesday quarter-boundary gate; all-time series only counts matching-division
-  seasons; null-skip when no interdivision games.
 - [ ] **Big matchups preview (Thu ~19:45, wks ≥7)** — `npm run preview-big-matchups -- --previous`.
   Verify live: the minute-granular ~30-min-pre-TNF gate; bucket thresholds still sane on 2026 data.
 - [ ] **Two-way chat commands (`!help/standings/record/power/matchup/trade/hof`)** —
