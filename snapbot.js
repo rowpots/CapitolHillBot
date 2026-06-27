@@ -75,6 +75,11 @@ export default class SnapBot {
   async launchSnapchat(obj, cookiefile) {
     try {
       const options = {
+        // Puppeteer's default protocolTimeout is 180s. A slow Snapchat Web
+        // render — especially several sends in a row — can blow past that and
+        // throw "Runtime.callFunctionOn timed out", killing the run. Give CDP
+        // calls more headroom (callers can still override via obj).
+        protocolTimeout: 300000,
         ...obj,
         // executablePath: "/usr/bin/google-chrome",  // for docker
       };
