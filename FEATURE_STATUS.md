@@ -49,6 +49,14 @@ league chat is outward-facing — confirm before doing it.
   19:44, stays true later that evening, rejects Fri + Wed, DST-aware). Week range (≥7 →14) + dedup
   reuse the same `hasSentWeeklyReport`/`markWeeklyReportSent`; null-skip + dry-run honored. No
   separate live shakedown needed.
+- [x] **Milestone alerts (clinch/elim + record book)** — *promoted from Tier 2 on 2026-06-26.*
+  Detection validated against real 2025 data (`preview-milestones --previous`, 24 events): record-book
+  lineage (highest/lowest/blowout/win-streak with correct "Previous:" refs), single + grouped
+  clinches, first-round-bye grouping, single + grouped eliminations. Drip scheduler
+  `computeReleaseSlots` boundary-tested (daytime ET slots only, spreads across consecutive days on a
+  backlog, never overnight, exact count, sorted). `flushMilestones` sends one event/cycle and stays
+  queued on send failure (inspected). Silent first-run baseline verified by inspection (same seeded
+  pattern the preview exercises). Depends on `WEEKLY_REPORTS_ENABLED` (where playoff odds compute).
 
 ---
 
@@ -58,9 +66,6 @@ These are committed/pushed and replay/test-chat verified. The pre-season task fo
 **confirm it fires on its own at the right ET time on the live loop** (run the bot with the feature
 enabled and `DRY_RUN=true` around the trigger, or do a one-off test-chat send to re-eyeball format).
 
-- [ ] **Milestone alerts (clinch/elim + record book)** — `npm run preview-milestones -- --previous`.
-  Verify live: detection at a real week-final, drip release (one/cycle) across days, silent baseline
-  on first run, Week ≥8 gate.
 - [ ] **Two-way chat commands (`!help/standings/record/power/matchup/trade/hof`)** —
   `npm run preview-chat-commands`. Verify live: priming on startup (no backlog reply), dedup ring,
   read-retry resilience, offseason→in-season standings source switch.
