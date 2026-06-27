@@ -783,7 +783,7 @@ export function formatRosterLabel(rosterId, rosterLookup, userLookup) {
   return `Roster ${rosterId}`;
 }
 
-function getEasternDateParts(date) {
+export function getEasternDateParts(date) {
   const formatter = new Intl.DateTimeFormat("en-US", {
     timeZone: EASTERN_TIME_ZONE,
     weekday: "long",

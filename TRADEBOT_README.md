@@ -4,6 +4,9 @@ This project watches a Sleeper dynasty league for completed trades and posts the
 
 It is built on top of SnapBot, but this guide is for the custom trade bot behavior in this folder.
 
+> **Feature testing status:** see [FEATURE_STATUS.md](FEATURE_STATUS.md) for the full feature
+> inventory split into what's fully tested vs. what still needs a live shakedown before the season.
+
 ## What It Does
 
 - Polls one Sleeper league for completed trades
@@ -90,6 +93,17 @@ These are the important ones:
 - `CHAT_COMMANDS_ENABLED`: two-way `!commands` members can type in the chat, `true` or `false`, default `true`
 - `CHAT_COMMAND_PREFIX`: the character that starts a command, default `!`
 - `CHAT_COMMANDS_CHAT_ID`: which chat to listen + reply in; blank = the main group chat
+- `LIVE_SCORING_ENABLED`: master switch for live in-game posts (score snapshots + alerts), `true` or `false`, default `false` (these post during games and are noisier than the scheduled features, so they're opt-in)
+- `LIVE_SCORING_CHAT_ID`: optional separate chat for **live-scoring posts only** — blank = the main group chat. Set it to your `TEST_SNAPCHAT_GROUP_CHAT_ID` value to verify live scoring in the test chat during real games while the rest of the bot keeps posting to the league chat as normal. Leave blank (or point it at the main chat) to roll it out to the league.
+- `LIVE_SCORE_SNAPSHOTS_ENABLED`: scheduled in-game score snapshots, default `true` (only when `LIVE_SCORING_ENABLED`)
+- `LIVE_BIG_PERFORMANCE_ENABLED`: real-time shoutout when a starter goes off, default `true`
+- `LIVE_BIG_PERFORMANCE_THRESHOLD`: points a starter must hit to trigger the shoutout, default `35`
+- `LIVE_NAILBITER_ENABLED`: late-window close-game alerts, default `true`
+- `LIVE_NAILBITER_MARGIN`: max point margin to count as a nailbiter, default `5`
+- `LIVE_UPSET_ENABLED`: alert when the team with the worse record is leading, default `true`
+- `LIVE_MIN_COMBINED_FOR_ALERT`: combined two-team score below which nailbiter/upset alerts are held (avoids early-game false alarms), default `120`
+- `LIVE_LAST_GAME_ALERT_ENABLED`: "going into the last game (MNF/SNF), Team X needs Y with N to play" alert, default `true`
+- `LIVE_LAST_GAME_MAX_DEFICIT`: largest deficit that still triggers the last-game alert (bigger = effectively decided, so skip), default `30`
 - `HEADLESS`: `false` is easier for debugging
 - `DRY_RUN`: `true` logs instead of sending to Snapchat
 - `RUN_ONCE`: `true` checks once and exits
@@ -143,6 +157,12 @@ npm run preview-trade-card
 ```
 
 The preview PNG is written to `.state/cards/trade-compact-b-preview.png`.
+
+Preview live in-game scoring (snapshot + alerts) against a real week without posting:
+
+```bash
+npm run preview-live-scoring -- --previous --week 14
+```
 
 Send a weekly standings test to a separate Snapchat group chat:
 
@@ -317,6 +337,50 @@ npm run preview-big-matchups -- --previous
 ```
 
 Add `--week N --send` to push one specific week's report to the test chat.
+
+## Live In-Game Scoring
+
+Real-time posts during the games themselves — **off by default** (set `LIVE_SCORING_ENABLED=true`),
+since these fire while games are live and are noisier than the once-a-week scheduled posts. The bot
+only checks during NFL game windows (Thursday night, Sunday afternoon/evening, Monday night, Eastern
+time) so it isn't hammering Sleeper off-hours, and it sends **at most one live message per cycle**
+(same anti-spam rule as trade and milestone sends — any backlog trickles out one at a time).
+
+Four kinds of posts, each independently toggleable:
+
+- **🏟️ Score snapshots** — a leaderboard of every matchup's current score, posted at set checkpoints
+  (after the early Sunday games, after the afternoon games, a Sunday-night wrap, plus Thursday and
+  Monday night), with the top score and closest game called out. `LIVE_SCORE_SNAPSHOTS_ENABLED`.
+- **🔥 Big-performance alerts** — when any starter crosses `LIVE_BIG_PERFORMANCE_THRESHOLD` points
+  (default 35), a shoutout fires. `LIVE_BIG_PERFORMANCE_ENABLED`.
+- **😬 Nailbiter alerts** — late in a game window, a matchup within `LIVE_NAILBITER_MARGIN` points
+  (default 5) gets flagged as too close to call. `LIVE_NAILBITER_ENABLED`.
+- **🚨 Upset alerts** — late in a window, if the team with the worse season record is leading, the
+  bot calls out the upset in progress. `LIVE_UPSET_ENABLED`.
+- **🌙 Last-game alert** — when the only NFL game left for the week is the final slot (Monday Night,
+  or Sunday Night on a rare MNF-less week), the bot calls out any trailing team that's still alive:
+  *"Team X needs 6.0 with 1 player left to play (Saquon Barkley) to catch Team Y (down 5.9)."*
+  `LIVE_LAST_GAME_ALERT_ENABLED`.
+
+Nailbiter/upset alerts hold off until the two teams' combined score clears
+`LIVE_MIN_COMBINED_FOR_ALERT` (default 120) so early-game scores don't trip false alarms.
+
+The last-game alert needs to know which players haven't kicked off yet, which Sleeper doesn't
+expose — so it pulls the free **ESPN public scoreboard** (no API key) to get each NFL team's game
+status (`nfl-schedule.js`). It only fires once the rest of the week's games are final and a trailing
+team still has player(s) going, and skips deficits bigger than `LIVE_LAST_GAME_MAX_DEFICIT`
+(default 30) as effectively decided.
+
+Preview the snapshot and every alert type against a real (past) week without posting:
+
+```bash
+npm run preview-live-scoring -- --previous --week 14
+```
+
+Add `--week N` (repeatable) to target specific weeks, `--types snapshot,bigperf,nailbiter,upset,lastgame`
+to pick which to show, or `--send` (with `TEST_SNAPCHAT_GROUP_CHAT_ID`) to push the messages to the
+test chat. The `lastgame` preview simulates "going into the last game" against the week's final
+totals, since a completed week's real schedule is all final.
 
 ## Milestone Alerts
 

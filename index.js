@@ -68,6 +68,13 @@ import {
   formatStandingsMessage,
   parseCommand,
 } from "./chat-commands.js";
+import { liveScoringFeature } from "./live-scoring.js";
+
+// Self-contained scheduled features ({ id, shouldRun, run }) that run off a
+// shared ctx instead of a bespoke pollForX wired into the loop. New features
+// register here; the existing pollers migrate opportunistically. See the
+// "feature-module" plan for index.js cleanup.
+const FEATURE_MODULES = [liveScoringFeature];
 
 dotenv.config();
 installTimestampedConsole();
@@ -227,6 +234,10 @@ const config = {
   // Which chat the command listener reads + replies in. Defaults to the main
   // group; point it at the test chat via env while verifying.
   chatCommandsChatId: process.env.CHAT_COMMANDS_CHAT_ID?.trim() ?? "",
+  // Optional separate chat for feature-module (live-scoring) posts. Lets the
+  // live bot keep posting everything else to the league chat while live-scoring
+  // messages go to the test chat for in-season verification. Blank = main chat.
+  liveScoringChatId: process.env.LIVE_SCORING_CHAT_ID?.trim() ?? "",
 };
 
 const bot = new SnapBot();
@@ -309,6 +320,7 @@ async function main() {
       await pollForDraftResultsSnapshot(draftResultsState);
       await pollForTrades(state);
       await pollForChatCommands(chatCommandsState);
+      await runFeatureModules();
     } catch (error) {
       console.error("Polling cycle failed, but the bot will keep running.");
       console.error(error);
@@ -2271,6 +2283,43 @@ async function sendChatMessage(message, label, { chatId } = {}) {
     exit: false,
   });
   console.log(`Sent ${label} to ${describeNotificationChat(targetChatId)}.`);
+}
+
+// Shared services handed to every feature module each cycle. Keeps a feature's
+// fetch/send/state wiring inside its own file instead of growing index.js.
+function buildFeatureContext() {
+  return {
+    leagueId: config.sleeperLeagueId,
+    dryRun: config.dryRun,
+    stateDir: STATE_DIR,
+    now: new Date(),
+    logger: console,
+    fetchJson,
+    loadPlayersById,
+    // LIVE_SCORING_CHAT_ID, when set, routes live-scoring posts to a separate
+    // (e.g. test) chat while the rest of the bot posts to the league chat as
+    // normal. Empty → falls back to the main chat in sendChatMessage.
+    sendMessage: (message, label) =>
+      sendChatMessage(message, label, {
+        chatId: config.liveScoringChatId || undefined,
+      }),
+  };
+}
+
+// Each module gates itself via shouldRun(); one failing module never blocks the
+// others (or the legacy pollers).
+async function runFeatureModules() {
+  const ctx = buildFeatureContext();
+  for (const featureModule of FEATURE_MODULES) {
+    try {
+      if (await featureModule.shouldRun(ctx)) {
+        await featureModule.run(ctx);
+      }
+    } catch (error) {
+      console.error(`Feature module "${featureModule.id}" failed this cycle.`);
+      console.error(error);
+    }
+  }
 }
 
 async function sendTradeCardMessage(analysis, label, { chatId } = {}) {

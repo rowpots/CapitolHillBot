@@ -19,7 +19,8 @@
     "preview-trade-card": "node preview-trade-card.js",
     "preview-awards": "node preview-awards.js",
     "preview-hall-of-fame": "node preview-hall-of-fame.js",
-    "preview-chat-commands": "node preview-chat-commands.js"
+    "preview-chat-commands": "node preview-chat-commands.js",
+    "preview-live-scoring": "node preview-live-scoring.js"
   },
   "author": "Roger Rodrigues",
   "dependencies": {
