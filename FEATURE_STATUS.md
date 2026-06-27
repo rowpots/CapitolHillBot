@@ -40,6 +40,15 @@ league chat is outward-facing — confirm before doing it.
   `isWeekdayAfterHourInEastern(…, "Wednesday", …)` + the same `hasSentWeeklyReport`/
   `markWeeklyReportSent` dedup, gated to `RIVALRY_QUARTER_WEEKS`; all-time walk wrapped in try/catch.
   No separate live shakedown needed.
+- [x] **Big matchups preview (Thu ~19:45, wks ≥7)** — *promoted from Tier 2 on 2026-06-26.* Content
+  validated against real 2025 data (`preview-big-matchups --previous`, wks 8-14): varied bucket
+  classification (🎯 Elim / 🔒 Clinch / ⚔️ Showdown / 🏗️ Draft Bowl), **not** a degenerate 6/6 every
+  week (wk8=1 bucket, wk11=all four), at-risk teams named correctly incl. "could both clinch"
+  grouping. The one piece not shared with the proven machinery — the minute-granular gate
+  `isWeekdayAtOrAfterTimeInEastern` — was **directly boundary-tested 7/7** (fires at Thu 19:45 not
+  19:44, stays true later that evening, rejects Fri + Wed, DST-aware). Week range (≥7 →14) + dedup
+  reuse the same `hasSentWeeklyReport`/`markWeeklyReportSent`; null-skip + dry-run honored. No
+  separate live shakedown needed.
 
 ---
 
@@ -52,8 +61,6 @@ enabled and `DRY_RUN=true` around the trigger, or do a one-off test-chat send to
 - [ ] **Milestone alerts (clinch/elim + record book)** — `npm run preview-milestones -- --previous`.
   Verify live: detection at a real week-final, drip release (one/cycle) across days, silent baseline
   on first run, Week ≥8 gate.
-- [ ] **Big matchups preview (Thu ~19:45, wks ≥7)** — `npm run preview-big-matchups -- --previous`.
-  Verify live: the minute-granular ~30-min-pre-TNF gate; bucket thresholds still sane on 2026 data.
 - [ ] **Two-way chat commands (`!help/standings/record/power/matchup/trade/hof`)** —
   `npm run preview-chat-commands`. Verify live: priming on startup (no backlog reply), dedup ring,
   read-retry resilience, offseason→in-season standings source switch.
