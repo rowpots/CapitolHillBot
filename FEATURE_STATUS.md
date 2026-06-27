@@ -24,6 +24,13 @@ league chat is outward-facing — confirm before doing it.
   values, history lines, roast hook. Battle-tested in production.
 - [x] **Weekly standings + recap (Tue, wks 1-14)** — runs weekly in production; Monte Carlo playoff
   odds, superlatives recap (best-effort second message).
+- [x] **Power rankings (Thu, wks 2-14)** — *promoted from Tier 2 on 2026-06-26.* Content validated
+  against real 2025 data (`preview-power-rankings --previous`, wks 8 + 14: scores in the 40-99 band,
+  medals, movement arrows all correct). Scheduling reuses the **identical** proven machinery as the
+  Tuesday report — `isThursdayAfterHourInEastern` (same date-gate family) + the same
+  `hasSentWeeklyReport`/`markWeeklyReportSent` dedup, with the 2-14 window gate
+  (`latestCompletedWeek < 1` skip / `> REGULAR_SEASON_END_WEEK` stop). Same code path that already
+  fires live every Tuesday, so no separate live shakedown needed.
 
 ---
 
@@ -33,8 +40,6 @@ These are committed/pushed and replay/test-chat verified. The pre-season task fo
 **confirm it fires on its own at the right ET time on the live loop** (run the bot with the feature
 enabled and `DRY_RUN=true` around the trigger, or do a one-off test-chat send to re-eyeball format).
 
-- [ ] **Power rankings (Thu, wks 2-14)** — `npm run preview-power-rankings -- --previous --week 14`.
-  Verify: Thursday `POWER_RANKING_SEND_HOUR_ET` gate fires live; movement arrows correct week-1.
 - [ ] **Milestone alerts (clinch/elim + record book)** — `npm run preview-milestones -- --previous`.
   Verify live: detection at a real week-final, drip release (one/cycle) across days, silent baseline
   on first run, Week ≥8 gate.
