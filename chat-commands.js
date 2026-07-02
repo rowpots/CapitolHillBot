@@ -358,7 +358,7 @@ export function buildTradeEvaluationMessage({ argString, playerIndex, valueBook,
     lines.push(`Dead even — ${formatOneDecimal(sideA.total)} vs ${formatOneDecimal(sideB.total)}. Grades ${grade1}/${grade2}.`);
   } else {
     const winner = sideA.total < sideB.total ? "Side 1" : "Side 2";
-    lines.push(`${winner} comes out ahead by ${diff.toLocaleString()} in DynastyProcess value.`);
+    lines.push(`${winner} comes out ahead by ${diff.toLocaleString()} in ${valueBook?.source ?? "value"} value.`);
     lines.push(`Grades — Side 1: ${grade1} · Side 2: ${grade2}`);
   }
 

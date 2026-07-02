@@ -68,6 +68,7 @@ These are the important ones:
 - `TRANSACTION_END_ROUND`: last Sleeper transaction round to scan
 - `TRADE_PRIME_TIME_SEND_HOUR_ET`: trades accepted before this Eastern hour are queued until this time, default `16`
 - `DYNASTY_VALUE_MODE`: `auto`, `1qb`, or `2qb`
+- `VALUE_SOURCE`: `dynastyprocess` or `ktc` (KeepTradeCut), default `dynastyprocess`
 - `TRADE_NOTIFICATION_MODE`: `text` or `image`, default `text`
 - `ROAST_MODE`: `true` or `false`
 - `ROAST_THRESHOLD`: higher number means fewer roasts
@@ -717,8 +718,8 @@ League members can type commands right in the group chat and the bot replies. Co
 - `!record <team>` — a team's record, points, and rank (e.g. `!record JoshPT`)
 - `!power` — power rankings
 - `!matchup [team]` — this week's matchups (optionally just one team's)
-- `!trade <players> for <players>` — grades a hypothetical trade by DynastyProcess value
-  (e.g. `!trade Lamar Jackson for Jayden Daniels`)
+- `!trade <players> for <players>` — grades a hypothetical trade by dynasty value (source
+  configurable via `VALUE_SOURCE`) (e.g. `!trade Lamar Jackson for Jayden Daniels`)
 - `!hof` — the all-time Hall of Fame
 
 The bot listens in the main group chat by default; set `CHAT_COMMANDS_CHAT_ID` to listen elsewhere.

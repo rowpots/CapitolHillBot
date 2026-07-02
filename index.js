@@ -5,7 +5,7 @@ import { fileURLToPath } from "url";
 import dotenv from "dotenv";
 
 import { describeError, installTimestampedConsole, parseJsonFile } from "./logging.js";
-import { loadDynastyValueBook } from "./dynasty-values.js";
+import { loadValueBook } from "./dynasty-values.js";
 import { getRoastForSeverity } from "./roast-templates.js";
 import SnapBot from "./snapbot.js";
 import { renderTradeCardImage } from "./trade-card.js";
@@ -156,6 +156,7 @@ const config = {
   transactionStartRound: parseInteger(process.env.TRANSACTION_START_ROUND, 0),
   transactionEndRound: parseInteger(process.env.TRANSACTION_END_ROUND, 18),
   dynastyValueMode: parseValueMode(process.env.DYNASTY_VALUE_MODE, "auto"),
+  valueSource: parseValueSource(process.env.VALUE_SOURCE, "dynastyprocess"),
   tradeNotificationMode: parseTradeNotificationMode(
     process.env.TRADE_NOTIFICATION_MODE,
     "text"
@@ -474,7 +475,8 @@ async function pollForTrades(state) {
 
   let valueBook = null;
   try {
-    valueBook = await loadDynastyValueBook({
+    valueBook = await loadValueBook({
+      source: config.valueSource,
       cacheDir: STATE_DIR,
       preferredMode: config.dynastyValueMode,
       league,
@@ -1460,7 +1462,8 @@ async function pollForDraftPreview(draftPreviewState) {
 
   let valueBook = null;
   try {
-    valueBook = await loadDynastyValueBook({
+    valueBook = await loadValueBook({
+      source: config.valueSource,
       cacheDir: STATE_DIR,
       preferredMode: config.dynastyValueMode,
       league,
@@ -1693,7 +1696,8 @@ async function buildCommandReply(parsed) {
     case "trade": {
       const [playersById, valueBook] = await Promise.all([
         loadPlayersById(),
-        loadDynastyValueBook({
+        loadValueBook({
+          source: config.valueSource,
           cacheDir: STATE_DIR,
           preferredMode: config.dynastyValueMode,
           league,
@@ -3951,6 +3955,15 @@ function parseValueMode(value, fallbackValue) {
 function parseTradeNotificationMode(value, fallbackValue) {
   const normalized = String(value ?? fallbackValue).trim().toLowerCase();
   if (normalized === "text" || normalized === "image") {
+    return normalized;
+  }
+
+  return fallbackValue;
+}
+
+function parseValueSource(value, fallbackValue) {
+  const normalized = String(value ?? fallbackValue).trim().toLowerCase();
+  if (normalized === "dynastyprocess" || normalized === "ktc") {
     return normalized;
   }
 

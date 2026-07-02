@@ -17,7 +17,7 @@ import { describeError, installTimestampedConsole } from "./logging.js";
 import SnapBot from "./snapbot.js";
 import { buildHallOfFameReport } from "./hall-of-fame.js";
 import { buildPowerRankings, findLatestCompletedWeek } from "./weekly-report.js";
-import { loadDynastyValueBook } from "./dynasty-values.js";
+import { loadValueBook } from "./dynasty-values.js";
 import {
   buildHelpMessage,
   buildMatchupPairings,
@@ -136,7 +136,8 @@ async function buildCommandReply(parsed, leagueId) {
     case "trade": {
       const [playersById, valueBook] = await Promise.all([
         fetchJson("https://api.sleeper.app/v1/players/nfl"),
-        loadDynastyValueBook({
+        loadValueBook({
+          source: process.env.VALUE_SOURCE?.trim() || "dynastyprocess",
           cacheDir: STATE_DIR,
           preferredMode: process.env.DYNASTY_VALUE_MODE?.trim() || "auto",
           league,

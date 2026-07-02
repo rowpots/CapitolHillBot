@@ -83,6 +83,13 @@ enabled and `DRY_RUN=true` around the trigger, or do a one-off test-chat send to
   `npm run preview-hall-of-fame`. Content live-tested. **Event-gated:** the actual season-end
   auto-fire (after wk17 final, in `pollForPlayoffRecap`) and the HoF merge-before-send idempotency
   haven't run on a live season-close yet.
+- [ ] **KTC value source (`VALUE_SOURCE=ktc`)** — DynastyProcess stays the default (Tier 1,
+  unchanged). KTC path validated via scratch scripts: live fetch from
+  `keeptradecut.com/dynasty-rankings` (no Puppeteer needed, data's a plain embedded JS array),
+  `getPlayerValue`/`getPickValue` correct against real values, Early>Mid>Late tier ordering
+  confirmed, stale-cache fallback confirmed on simulated network failure, and the `!trade` command
+  end-to-end in both modes. Not yet run inside the live bot's poll loop — verify one real trade
+  grades correctly with `VALUE_SOURCE=ktc` set before trusting it for a league.
 
 ---
 

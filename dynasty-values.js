@@ -1,11 +1,42 @@
 import fs from "fs/promises";
 import path from "path";
 
+import {
+  buildPlayerLookupKeys,
+  clamp,
+  formatOrdinal,
+  normalizePickLabel,
+  normalizeText,
+  readAnyCache,
+  readFreshCache,
+  resolveValueMode,
+} from "./value-shared.js";
+
 const DYNASTYPROCESS_VALUES_URL =
   "https://raw.githubusercontent.com/dynastyprocess/data/master/files/values.csv";
 const VALUES_CACHE_TTL_MS = 24 * 60 * 60 * 1000;
 
 let inMemoryValueBook = null;
+
+// Dispatches to the configured value source. DynastyProcess stays the
+// default so existing deployments are unaffected; VALUE_SOURCE=ktc opts a
+// league into KeepTradeCut values instead. Both sources implement the same
+// { source, sourceDate, valueMode, getPlayerValue, getPickValue } shape, so
+// callers never need to know which one is active.
+export async function loadValueBook({
+  source = "dynastyprocess",
+  cacheDir,
+  preferredMode,
+  league,
+  logger,
+}) {
+  if (String(source ?? "dynastyprocess").toLowerCase() === "ktc") {
+    const { loadKtcValueBook } = await import("./ktc-values.js");
+    return loadKtcValueBook({ cacheDir, preferredMode, league, logger });
+  }
+
+  return loadDynastyValueBook({ cacheDir, preferredMode, league, logger });
+}
 
 export async function loadDynastyValueBook({
   cacheDir,
@@ -13,7 +44,7 @@ export async function loadDynastyValueBook({
   league = null,
   logger = console,
 }) {
-  const valueMode = resolveDynastyValueMode(preferredMode, league);
+  const valueMode = resolveValueMode(preferredMode, league);
 
   if (inMemoryValueBook && inMemoryValueBook.valueMode === valueMode) {
     return inMemoryValueBook;
@@ -147,50 +178,11 @@ export async function loadDynastyValueBook({
   return inMemoryValueBook;
 }
 
-export function resolveDynastyValueMode(preferredMode, league = null) {
-  const normalizedMode = String(preferredMode ?? "auto").toLowerCase();
-  if (normalizedMode === "1qb" || normalizedMode === "2qb") {
-    return normalizedMode;
-  }
-
-  const rosterPositions = Array.isArray(league?.roster_positions)
-    ? league.roster_positions
-    : [];
-
-  if (rosterPositions.includes("SUPER_FLEX")) {
-    return "2qb";
-  }
-
-  const quarterbackSlots = rosterPositions.filter(
-    (position) => position === "QB"
-  ).length;
-
-  if (quarterbackSlots >= 2) {
-    return "2qb";
-  }
-
-  return "1qb";
-}
-
-function buildPlayerLookupKeys(player) {
-  const normalizedName = normalizeText(
-    player.full_name ||
-      [player.first_name, player.last_name].filter(Boolean).join(" ")
-  );
-  const normalizedPosition = normalizeText(player.position);
-  const normalizedTeam = normalizeText(player.team);
-
-  return {
-    exactKeys: [
-      `${normalizedName}|${normalizedPosition}|${normalizedTeam}`,
-      `${normalizedName}|${normalizedPosition}|`,
-    ],
-    fallbackKeys: [`${normalizedName}|${normalizedPosition}`],
-  };
-}
+// Kept as an alias for anything importing the old name directly.
+export { resolveValueMode as resolveDynastyValueMode };
 
 async function loadValuesCsv(cacheFilePath, logger) {
-  const cachedCsv = await readFreshCache(cacheFilePath);
+  const cachedCsv = await readFreshCache(cacheFilePath, VALUES_CACHE_TTL_MS);
   if (cachedCsv) {
     return cachedCsv;
   }
@@ -224,29 +216,6 @@ async function loadValuesCsv(cacheFilePath, logger) {
     }
 
     throw error;
-  }
-}
-
-async function readFreshCache(cacheFilePath) {
-  try {
-    const stats = await fs.stat(cacheFilePath);
-    const cacheAgeMs = Date.now() - stats.mtimeMs;
-
-    if (cacheAgeMs > VALUES_CACHE_TTL_MS) {
-      return null;
-    }
-
-    return fs.readFile(cacheFilePath, "utf8");
-  } catch (error) {
-    return null;
-  }
-}
-
-async function readAnyCache(cacheFilePath) {
-  try {
-    return await fs.readFile(cacheFilePath, "utf8");
-  } catch (error) {
-    return null;
   }
 }
 
@@ -323,45 +292,4 @@ function parseNullableNumber(value) {
 
   const parsed = Number(value);
   return Number.isFinite(parsed) ? parsed : null;
-}
-
-function normalizeText(value) {
-  return String(value ?? "")
-    .normalize("NFD")
-    .replace(/[\u0300-\u036f]/g, "")
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, "");
-}
-
-function normalizePickLabel(label) {
-  return String(label ?? "")
-    .toLowerCase()
-    .replace(/\s+/g, " ")
-    .trim();
-}
-
-function formatOrdinal(round) {
-  const numericRound = Number(round);
-  if (!Number.isFinite(numericRound)) {
-    return `${round}`;
-  }
-
-  if (numericRound % 100 >= 11 && numericRound % 100 <= 13) {
-    return `${numericRound}th`;
-  }
-
-  switch (numericRound % 10) {
-    case 1:
-      return `${numericRound}st`;
-    case 2:
-      return `${numericRound}nd`;
-    case 3:
-      return `${numericRound}rd`;
-    default:
-      return `${numericRound}th`;
-  }
-}
-
-function clamp(value, minimum, maximum) {
-  return Math.min(Math.max(value, minimum), maximum);
 }

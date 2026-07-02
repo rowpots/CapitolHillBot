@@ -28,7 +28,11 @@ engineering map — keep it lean.
   chat).
 - `player-points.js` — per-player extraction from raw `starters`/`players_points`
   (`extractStarterPointsForRoster`, `findTopPerformances`).
-- `dynasty-values.js` — DynastyProcess value book (`getPlayerValue` / `getPickValue`).
+- `dynasty-values.js` — DynastyProcess value book + `loadValueBook` source dispatcher
+  (`getPlayerValue` / `getPickValue`).
+- `ktc-values.js` — KeepTradeCut value book (same shape), selected via `VALUE_SOURCE=ktc`.
+- `value-shared.js` — shared value-mode resolution + name/label normalization helpers used by
+  both value-book sources.
 - `roasts.json` / `roast-templates.js` — roast lines + loader.
 
 ## Snapchat send gotchas (learned the hard way — don't regress these)
