@@ -91,6 +91,19 @@ enabled and `DRY_RUN=true` around the trigger, or do a one-off test-chat send to
   end-to-end in both modes. Not yet run inside the live bot's poll loop — verify one real trade
   grades correctly with `VALUE_SOURCE=ktc` set before trusting it for a league.
 
+## Analytics tools (no autonomous send path)
+
+Manual/offline tools that never fire on the live loop, so there's nothing to smoke-test on a
+schedule — just re-run the preview if the data or value source changes.
+
+- [x] **Roster analytics + trade finder (`roster-analysis.js`)** — validated 2026-07-01 via
+  `npm run preview-roster-analysis` against the live league in **both** value modes (KTC + superflex
+  and DynastyProcess): value shares sum to ~100%, positional splits + starter/depth + win-now/rebuild
+  tilt coherent, and every trade idea is direction-correct (each side ships its surplus position =
+  the other's need) and value-fair (within the ±0.10 grade band, no fleecings). Print-only today;
+  Phase 2 will expose it via chat commands (`!tradefinder`/`!roster`/`!values`), at which point the
+  live-send path gets its own checklist entry.
+
 ---
 
 ## Tier 3 — Needs real live testing (do first)

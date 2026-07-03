@@ -737,6 +737,23 @@ npm run preview-chat-commands
 That prints the replies it *would* send; add `--send` to actually reply in the chat, or
 `--chat-id <id>` / `--main` to target a different chat.
 
+## Roster Analytics & Trade Finder
+
+An offline analytics tool (no sending) that profiles every roster by **dynasty value** and surfaces
+fair trade ideas. It reuses whichever value source is configured (`VALUE_SOURCE`), so the numbers
+match `!trade` grades. It reports, per team: total dynasty value + league share, a QB/RB/WR/TE
+value split, a starter-vs-depth split, and a win-now/rebuild tilt (value-weighted average age). The
+trade finder pairs teams whose strengths cover each other's weaknesses and proposes swaps that stay
+value-fair (never a lopsided fleecing).
+
+```bash
+npm run preview-roster-analysis
+```
+
+Flags: `--source ktc|dynastyprocess` and `--mode 1qb|2qb` override the value source/mode for a
+spot-check (otherwise inherited from `.env`), and `--ideas <n>` sets how many trade ideas to list.
+The engine lives in `roster-analysis.js`; it's pure/reusable so chat commands can expose it later.
+
 ## Trade Message Format
 
 Real trades are sent like this:

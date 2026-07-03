@@ -33,6 +33,11 @@ engineering map — keep it lean.
 - `ktc-values.js` — KeepTradeCut value book (same shape), selected via `VALUE_SOURCE=ktc`.
 - `value-shared.js` — shared value-mode resolution + name/label normalization helpers used by
   both value-book sources.
+- `roster-analysis.js` — pure analytics engine over rosters + a value book:
+  `buildRosterValuations` (per-team dynasty value, positional split, starter/depth, win-now/rebuild
+  tilt), `rankRosters` (value leaderboard), `findTrades` (fair, need-matched trade finder). No
+  network calls; source-agnostic. Preview via `npm run preview-roster-analysis`
+  (`--source`/`--mode`/`--ideas`).
 - `roasts.json` / `roast-templates.js` — roast lines + loader.
 
 ## Snapchat send gotchas (learned the hard way — don't regress these)
