@@ -104,6 +104,15 @@ schedule — just re-run the preview if the data or value source changes.
   Phase 2 will expose it via chat commands (`!tradefinder`/`!roster`/`!values`), at which point the
   live-send path gets its own checklist entry.
 
+## Ops / hosting (no send path)
+
+- [ ] **VPS deployment package** (`deploy/`, `alerts.js`, `login.js`, Linux launch flags,
+  login-required guard) — code-complete, dry-run-tested on Windows. Not yet exercised on a real
+  server. Verify during cutover (checklist = `deploy/server-setup.md` §6-§7): "Loaded N known
+  transaction id(s)" (not "Seeded"), cookie-restored session headless, Discord startup alert,
+  healthchecks.io green. The session-expired alert + hourly-park path only proves out the first
+  time cookies genuinely die on the VPS.
+
 ---
 
 ## Tier 3 — Needs real live testing (do first)

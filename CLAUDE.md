@@ -39,6 +39,13 @@ engineering map — keep it lean.
   network calls; source-agnostic. Preview via `npm run preview-roster-analysis`
   (`--source`/`--mode`/`--ideas`).
 - `roasts.json` / `roast-templates.js` — roast lines + loader.
+- `alerts.js` — fire-and-forget ops alerts for unattended runs: Discord webhook
+  (`sendAlert`, per-key cooldowns persisted in `.state/last-alert.json`) + healthchecks.io ping
+  (`pingHealthcheck`). Both no-op when their env var is blank. Never throws.
+- `login.js` (`npm run login`) — PC-only headful cookie refresher: log in (human does CAPTCHA/2FA),
+  save `./<user>-cookies.json`, exit. Cookies then scp to the VPS.
+- `deploy/` — VPS hosting: systemd unit, update/backup scripts, and `server-setup.md` (the full
+  Ubuntu runbook incl. cutover + cookie-refresh procedures).
 
 ## Snapchat send gotchas (learned the hard way — don't regress these)
 
@@ -158,5 +165,12 @@ State per `(season, week)`: `sentSnapshots` + `firedSignatures` 200-ring, reset 
 
 - Player index cache TTL 24h (`PLAYERS_CACHE_TTL_MS`) so freshly-traded players don't render as
   `Player <id>`. Stale-cache warning logs once per outage.
+- **Login-required guard**: a chat-list timeout with the login screen visible throws with
+  `code: "SNAP_LOGIN_REQUIRED"` (`snapbot.js`); `establishSnapchatSessionWithGuard` (`index.js`)
+  then alerts Discord and parks (retry hourly) instead of exiting — never let a cookie-death path
+  crash-loop against Snapchat's login screen. All other session errors still exit fatally
+  (systemd restarts).
+- On Linux the Snapchat launch adds `--no-sandbox` etc. via a `process.platform` spread in
+  `establishSnapchatSession` — required on Ubuntu 24.04; don't remove.
 - Secrets (`.env`, `*-cookies.json`) and `.state/` are gitignored — never commit them.
 - Commit messages: no Claude/co-author attribution trailers.

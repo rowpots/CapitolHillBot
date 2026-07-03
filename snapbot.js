@@ -1150,9 +1150,16 @@ export default class SnapBot {
         ? ` Last seen URL: ${lastKnownState.url}`
         : "";
 
-    throw new Error(
+    const error = new Error(
       `Timed out waiting for the Snapchat chat list after ${timeout}ms.${timeoutDetail}`
     );
+    // Lets callers distinguish "cookies are dead, a human must re-login"
+    // from a transient load failure — index.js pauses instead of crash-looping
+    // against Snapchat's login screen.
+    if (lastKnownState?.loginScreenVisible) {
+      error.code = "SNAP_LOGIN_REQUIRED";
+    }
+    throw error;
   }
 
   async openMessagingHome() {

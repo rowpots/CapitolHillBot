@@ -105,6 +105,8 @@ These are the important ones:
 - `LIVE_MIN_COMBINED_FOR_ALERT`: combined two-team score below which nailbiter/upset alerts are held (avoids early-game false alarms), default `120`
 - `LIVE_LAST_GAME_ALERT_ENABLED`: "going into the last game (MNF/SNF), Team X needs Y with N to play" alert, default `true`
 - `LIVE_LAST_GAME_MAX_DEFICIT`: largest deficit that still triggers the last-game alert (bigger = effectively decided, so skip), default `30`
+- `DISCORD_WEBHOOK_URL`: optional Discord webhook for ops alerts (startup notice, daily heartbeat, fatal crash, "Snapchat session expired — re-login needed"). Blank = alerts off. Used for unattended/VPS runs; see `deploy/server-setup.md`
+- `HEALTHCHECK_PING_URL`: optional healthchecks.io ping URL, hit after every successful poll cycle (dead-man's-switch that catches a dead process or wedged loop). Blank = off
 - `HEADLESS`: `false` is easier for debugging
 - `DRY_RUN`: `true` logs instead of sending to Snapchat
 - `RUN_ONCE`: `true` checks once and exits

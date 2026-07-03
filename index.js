@@ -69,6 +69,7 @@ import {
   parseCommand,
 } from "./chat-commands.js";
 import { liveScoringFeature } from "./live-scoring.js";
+import { sendAlert, pingHealthcheck } from "./alerts.js";
 
 // Self-contained scheduled features ({ id, shouldRun, run }) that run off a
 // shared ctx instead of a bespoke pollForX wired into the loop. New features
@@ -249,6 +250,8 @@ let hasWarnedStalePlayerCache = false;
 main().catch(async (error) => {
   console.error("Fatal error while running the Sleeper trade bot.");
   console.error(error);
+  // Default 15-min cooldown caps a supervisor restart loop at ~4 pings/hour.
+  await sendAlert("fatal", `SnapBot FATAL: ${error?.message ?? error}`);
   await shutdown();
   process.exitCode = 1;
 });
@@ -305,6 +308,10 @@ async function main() {
     );
   }
 
+  await sendAlert("startup", "SnapBot online.", {
+    cooldownMs: 10 * 60 * 1000,
+  });
+
   do {
     try {
       await processQueuedManualTestTrade();
@@ -322,6 +329,14 @@ async function main() {
       await pollForTrades(state);
       await pollForChatCommands(chatCommandsState);
       await runFeatureModules();
+
+      // Dead-man's-switch: only successful cycles ping, so healthchecks.io
+      // catches both process death and a perma-failing loop. The 24h cooldown
+      // on the heartbeat alert makes it a once-a-day Discord "still alive".
+      pingHealthcheck();
+      await sendAlert("heartbeat", "SnapBot heartbeat: alive.", {
+        cooldownMs: 24 * 60 * 60 * 1000,
+      });
     } catch (error) {
       console.error("Polling cycle failed, but the bot will keep running.");
       console.error(error);
@@ -343,7 +358,56 @@ async function main() {
 
 async function startSnapchatSession() {
   console.log("Launching Snapchat Web.");
-  await establishSnapchatSession();
+  await establishSnapchatSessionWithGuard();
+}
+
+// Crash-loop guard. Dead cookies used to mean: 600s chat-list timeout → fatal
+// exit → supervisor restart → another login-screen hit, forever — a Snapchat
+// security-flag magnet. Instead: alert once (6h cooldown), park for an hour,
+// retry gently. Anything that isn't a login-required timeout still rethrows
+// into the existing fatal path.
+const LOGIN_REQUIRED_RETRY_MS = 60 * 60 * 1000;
+
+async function establishSnapchatSessionWithGuard() {
+  for (;;) {
+    try {
+      await establishSnapchatSession();
+      return;
+    } catch (error) {
+      if (error?.code !== "SNAP_LOGIN_REQUIRED") {
+        throw error;
+      }
+
+      await sendAlert(
+        "session-expired",
+        "SnapBot: Snapchat session expired — manual re-login needed.\n" +
+          "On the PC: `npm run login` (complete any CAPTCHA/2FA), then:\n" +
+          "`scp .\\capitolhillbot-cookies.json bot@VPS:~/CapitolHillBot/` and " +
+          "`ssh bot@VPS \"sudo systemctl restart snapbot\"` " +
+          "(see deploy/server-setup.md). Retrying hourly until then.",
+        { cooldownMs: 6 * 60 * 60 * 1000 }
+      );
+
+      console.warn(
+        "Snapchat login required and cannot be completed unattended. " +
+          `Pausing ${Math.round(LOGIN_REQUIRED_RETRY_MS / 60000)} minute(s) before retrying.`
+      );
+
+      try {
+        if (bot.browser) {
+          await bot.browser.close();
+        }
+      } catch {
+        // Best effort — the browser may already be gone.
+      }
+      bot.browser = null;
+      bot.page = null;
+
+      await new Promise((resolve) =>
+        setTimeout(resolve, LOGIN_REQUIRED_RETRY_MS)
+      );
+    }
+  }
 }
 
 async function establishSnapchatSession() {
@@ -357,6 +421,18 @@ async function establishSnapchatSession() {
         "--use-fake-ui-for-media-stream",
         "--use-fake-device-for-media-stream",
         "--enable-media-stream",
+        // Linux/VPS only: Ubuntu 24.04's AppArmor userns restriction breaks
+        // Chrome's sandbox for non-apt binaries; the box runs nothing but this
+        // bot. --disable-dev-shm-usage/--disable-gpu are headless stability
+        // insurance on a small droplet. No-ops for Windows dev runs.
+        ...(process.platform === "linux"
+          ? [
+              "--no-sandbox",
+              "--disable-setuid-sandbox",
+              "--disable-dev-shm-usage",
+              "--disable-gpu",
+            ]
+          : []),
       ],
     },
     credentials.username
@@ -418,7 +494,7 @@ async function restartSnapchatSession() {
     bot.page = null;
   }
 
-  await establishSnapchatSession();
+  await establishSnapchatSessionWithGuard();
 }
 
 async function ensureSnapchatSessionReady() {

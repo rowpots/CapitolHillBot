@@ -1,0 +1,25 @@
+[Unit]
+Description=SnapBot Sleeper-to-Snapchat bot
+After=network-online.target
+Wants=network-online.target
+# Backstop for fast-crash bugs (the login-required case never exits — the bot
+# parks in-process and retries hourly, so this limit shouldn't normally trip).
+StartLimitIntervalSec=600
+StartLimitBurst=5
+
+[Service]
+Type=simple
+User=bot
+WorkingDirectory=/home/bot/CapitolHillBot
+ExecStart=/usr/bin/node index.js
+Restart=always
+RestartSec=30
+# Forces headless on the server even if the .env copied from Windows says
+# false — dotenv never overrides env vars that are already set.
+Environment=HEADLESS=true
+# Keeps the browser fingerprint's timezone matching the old Windows machine
+# (bot scheduling itself is ET-internal and doesn't care about system TZ).
+Environment=TZ=America/New_York
+
+[Install]
+WantedBy=multi-user.target
