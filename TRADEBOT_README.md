@@ -66,7 +66,8 @@ These are the important ones:
 - `SNAPCHAT_LOGIN_TIMEOUT_MS`: how long to keep the browser open while login, 2FA, or verification finishes, default `600000`
 - `TRANSACTION_START_ROUND`: first Sleeper transaction round to scan
 - `TRANSACTION_END_ROUND`: last Sleeper transaction round to scan
-- `TRADE_SEND_DELAY_MINUTES`: every new trade waits this long before posting (this is your veto window), and back-to-back trades post this far apart, default `5`
+- `TRADE_PRIME_TIME_SEND_HOUR_ET`: trades accepted before this Eastern hour are held until this time, default `16`
+- `TRADE_SEND_DELAY_MINUTES`: minimum wait before any trade posts — this is your `!veto` window, and it applies even to trades accepted after prime time, default `5`
 - `TRADE_REVIEW_CHAT_ID`: chat that gets the "trade pending" heads-up and where you can reply `!veto` to keep that trade out of the league chat; blank = falls back to `TEST_SNAPCHAT_GROUP_CHAT_ID` (if that's blank too, trades post after the delay with no veto window)
 - `DYNASTY_VALUE_MODE`: `auto`, `1qb`, or `2qb`
 - `VALUE_SOURCE`: `dynastyprocess` or `ktc` (KeepTradeCut), default `dynastyprocess`
@@ -123,12 +124,13 @@ Start the live bot:
 npm run bot
 ```
 
-Live trades use a short review window before posting:
+Live trades use a daily prime-time hold plus a veto window:
 
-- every new trade is held for `TRADE_SEND_DELAY_MINUTES` (default 5) before it posts to the league chat
+- trades accepted before `TRADE_PRIME_TIME_SEND_HOUR_ET` (default 16 = 4 PM Eastern) are held until that hour
+- trades accepted at or after that hour still wait `TRADE_SEND_DELAY_MINUTES` (default 5) — every trade gets a veto window, nothing posts instantly
 - when a trade is detected, the bot posts a heads-up in the review chat (`TRADE_REVIEW_CHAT_ID`, falling back to `TEST_SNAPCHAT_GROUP_CHAT_ID`) showing the trade and its post time
 - reply `!veto <tag>` (the tag is in the heads-up; a bare `!veto` works when only one trade is pending) in the review chat to keep that trade out of the league chat — it's recorded as handled and never posts, though it still counts in trade history and grading
-- multiple trades detected together release one every `TRADE_SEND_DELAY_MINUTES` instead of bursting
+- multiple trades due at once trickle out one per poll cycle
 
 Queue a fake trade for the running bot:
 
@@ -136,7 +138,7 @@ Queue a fake trade for the running bot:
 npm run test-trade
 ```
 
-Add `--queue` to run the fake trade through the full review pipeline instead of sending immediately (heads-up in the review chat, veto window, then a timed release into the **test** chat):
+Add `--queue` to run the fake trade through the full review pipeline instead of sending immediately (heads-up in the review chat, veto window, then a timed release into the **test** chat — it skips the prime-time hold so the whole flow runs in minutes):
 
 ```bash
 npm run test-trade -- --queue

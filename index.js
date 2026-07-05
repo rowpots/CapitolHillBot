@@ -162,9 +162,13 @@ const config = {
     process.env.TRADE_NOTIFICATION_MODE,
     "text"
   ),
-  // Review-then-post pacing: every new trade waits this long before posting
-  // (that pause is the commissioner's veto window), and back-to-back trades
-  // release this far apart instead of bursting.
+  tradePrimeTimeSendHourEt: Math.max(
+    0,
+    Math.min(23, parseInteger(process.env.TRADE_PRIME_TIME_SEND_HOUR_ET, 16))
+  ),
+  // Minimum wait before ANY trade posts — that pause is the commissioner's
+  // veto window, so even trades accepted after prime time never post
+  // instantly.
   tradeSendDelayMinutes: Math.max(
     1,
     parseInteger(process.env.TRADE_SEND_DELAY_MINUTES, 5)
@@ -610,10 +614,10 @@ async function pollForTrades(state) {
         continue;
       }
 
-      // Every trade goes through the queue — the delay before release is the
-      // commissioner's veto window, so there is deliberately no instant path.
+      // Every trade goes through the queue — even post-prime-time trades wait
+      // out the veto window, so there is deliberately no instant path.
       const releaseAtTimestampMs =
-        resolveTradeNotificationReleaseAtTimestampMs(state);
+        resolveTradeNotificationReleaseAtTimestampMs(trade);
       queueTradeNotification(state, {
         transactionId: String(trade.transaction_id),
         acceptedAtTimestampMs: getTradeAcceptedTimestampMs(trade),
@@ -2235,12 +2239,11 @@ async function flushQueuedTradeNotifications(state) {
     );
   }
 
-  // Send at most one queued trade per poll cycle. Scheduling already spaces
-  // releases TRADE_SEND_DELAY_MINUTES apart, but a backlog can still pile up
-  // (e.g. after downtime) — without this they'd fire back-to-back in a tight
-  // loop, which both looks like spam and risks Snapchat's UI dropping a send
-  // when the textbox hasn't settled from the last one (the same issue we hit
-  // testing milestone alerts).
+  // Send at most one queued trade per poll cycle. Multiple trades accepted the
+  // same day all release at the same prime-time slot, so without this they'd
+  // fire back-to-back in a tight loop — which both looks like spam and risks
+  // Snapchat's UI dropping a send when the textbox hasn't settled from the last
+  // one (the same issue we hit testing milestone alerts).
   const [notification] = dueNotifications;
   try {
     const delivered = await deliverTradeNotification(notification.analysis, {
@@ -2572,7 +2575,9 @@ async function processQueuedManualTestTrade(state) {
     queueTradeNotification(state, {
       transactionId,
       acceptedAtTimestampMs: Date.now(),
-      releaseAtTimestampMs: resolveTradeNotificationReleaseAtTimestampMs(state),
+      // Manual tests skip the prime-time hold — they release right after the
+      // veto window so the pipeline can be exercised in minutes, not hours.
+      releaseAtTimestampMs: Date.now() + getTradeSendDelayMs(),
       analysis: {
         ...(tradeCardAnalysis ?? {}),
         tradeId: transactionId,
@@ -4051,20 +4056,33 @@ function getTradeAcceptedTimestampMs(trade) {
   return Number.isFinite(timestamp) ? timestamp : null;
 }
 
-// A new trade releases one delay from now, and never closer than one delay
-// after the last trade already waiting — a multi-trade batch trickles out one
-// every TRADE_SEND_DELAY_MINUTES instead of bursting.
-function resolveTradeNotificationReleaseAtTimestampMs(state) {
-  const latestQueuedReleaseAtMs = Math.max(
-    0,
-    ...(state.queuedTradeNotifications ?? []).map((notification) =>
-      Number(notification?.releaseAtTimestampMs ?? 0)
-    )
-  );
+// Trades accepted before the prime-time hour hold until that hour Eastern
+// (same day); everything else — including a hold that already lapsed while
+// the bot was down — still waits at least TRADE_SEND_DELAY_MINUTES so the
+// commissioner always gets a veto window before it reaches the league chat.
+function resolveTradeNotificationReleaseAtTimestampMs(trade) {
+  const minReleaseAtMs = Date.now() + getTradeSendDelayMs();
 
-  return (
-    Math.max(Date.now(), latestQueuedReleaseAtMs) + getTradeSendDelayMs()
-  );
+  const acceptedAtTimestampMs = getTradeAcceptedTimestampMs(trade);
+  if (!Number.isFinite(acceptedAtTimestampMs)) {
+    return minReleaseAtMs;
+  }
+
+  const easternParts = getEasternDateParts(new Date(acceptedAtTimestampMs));
+  if (easternParts.hour >= config.tradePrimeTimeSendHourEt) {
+    return minReleaseAtMs;
+  }
+
+  const primeTimeAtMs = getEasternTimestampForLocalDateTime({
+    year: easternParts.year,
+    month: easternParts.month,
+    day: easternParts.day,
+    hour: config.tradePrimeTimeSendHourEt,
+    minute: 0,
+    second: 0,
+  });
+
+  return Math.max(primeTimeAtMs, minReleaseAtMs);
 }
 
 function getTradeSendDelayMs() {
@@ -4095,6 +4113,43 @@ function getEasternDateParts(date) {
     minute: Number(getPart("minute")),
     second: Number(getPart("second")),
   };
+}
+
+function getEasternTimestampForLocalDateTime({
+  year,
+  month,
+  day,
+  hour,
+  minute = 0,
+  second = 0,
+}) {
+  const noonUtcDate = new Date(Date.UTC(year, month - 1, day, 12, 0, 0));
+  const offsetMinutes = getTimeZoneOffsetMinutes(noonUtcDate, EASTERN_TIME_ZONE);
+
+  return (
+    Date.UTC(year, month - 1, day, hour, minute, second) -
+    offsetMinutes * 60 * 1000
+  );
+}
+
+function getTimeZoneOffsetMinutes(date, timeZone) {
+  const formatter = new Intl.DateTimeFormat("en-US", {
+    timeZone,
+    timeZoneName: "shortOffset",
+    hour: "2-digit",
+  });
+  const value =
+    formatter.formatToParts(date).find((part) => part.type === "timeZoneName")
+      ?.value ?? "GMT";
+  const match = value.match(/^GMT([+-])(\d{1,2})(?::?(\d{2}))?$/i);
+  if (!match) {
+    return 0;
+  }
+
+  const sign = match[1] === "-" ? -1 : 1;
+  const hours = Number(match[2] ?? 0);
+  const minutes = Number(match[3] ?? 0);
+  return sign * (hours * 60 + minutes);
 }
 
 function resolveNotificationChatId(audience) {
