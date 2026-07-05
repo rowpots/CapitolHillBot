@@ -75,7 +75,8 @@ USER_PASSWORD=<Your Snapchat Password>
 SLEEPER_LEAGUE_ID=<Your Sleeper League ID>
 SNAPCHAT_GROUP_CHAT_ID=<Your Snapchat Group Chat ID>
 TEST_SNAPCHAT_GROUP_CHAT_ID=<Optional Test Group Chat ID>
-TRADE_PRIME_TIME_SEND_HOUR_ET=16
+TRADE_SEND_DELAY_MINUTES=5
+TRADE_REVIEW_CHAT_ID=<Optional Review Chat ID for the !veto window>
 ```
 
 
@@ -102,7 +103,7 @@ Helpful env flags:
 * `DRY_RUN=true` logs the message instead of posting to Snapchat
 * `RUN_ONCE=true` performs one poll and exits
 * `POLL_INTERVAL_MS=60000` checks once per minute by default
-* `TRADE_PRIME_TIME_SEND_HOUR_ET=16` holds overnight and morning trades until 4:00 PM Eastern, then sends later trades immediately
+* `TRADE_SEND_DELAY_MINUTES=5` holds each new trade for five minutes (your `!veto` window in the review chat) and spaces back-to-back trades that far apart
 * `TRADE_NOTIFICATION_MODE=image` switches trade alerts from text to image cards
 * `TEST_SNAPCHAT_GROUP_CHAT_ID=...` sends `npm run test-trade` to a separate test group chat
 

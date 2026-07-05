@@ -20,8 +20,10 @@ league chat is outward-facing — confirm before doing it.
 
 ## Tier 1 — Fully tested (no action needed)
 
-- [x] **Trade notifications + grading** — the original core. Live prime-time send queue, dynasty
-  values, history lines, roast hook. Battle-tested in production.
+- [x] **Trade notifications + grading** — the original core. Dynasty values, history lines, roast
+  hook. Battle-tested in production. **Note:** the send scheduling changed on 2026-07-05 from the
+  prime-time hold to the 5-minute review window + `!veto` (see Tier 2) — the detection/grading/
+  delivery paths here are unchanged.
 - [x] **Weekly standings + recap (Tue, wks 1-14)** — runs weekly in production; Monte Carlo playoff
   odds, superlatives recap (best-effort second message).
 - [x] **Power rankings (Thu, wks 2-14)** — *promoted from Tier 2 on 2026-06-26.* Content validated
@@ -66,6 +68,13 @@ These are committed/pushed and replay/test-chat verified. The pre-season task fo
 **confirm it fires on its own at the right ET time on the live loop** (run the bot with the feature
 enabled and `DRY_RUN=true` around the trigger, or do a one-off test-chat send to re-eyeball format).
 
+- [ ] **Trade review window + `!veto` (replaces the prime-time hold, added 2026-07-05)** — every
+  trade now queues for `TRADE_SEND_DELAY_MINUTES` (default 5) with a heads-up in the review chat
+  (`TRADE_REVIEW_CHAT_ID`, falls back to the test chat); replying `!veto <tag>` there kills the
+  league-chat post. Syntax-checked only — never run live. Verify with the bot running:
+  `npm run test-trade -- --queue` (releases to the **test** chat, never the league) three ways:
+  (1) let it release on time, (2) `!veto <tag>` inside the window, (3) bare `!veto` with one trade
+  pending. Also confirm the veto-listener priming log line on the first heads-up.
 - [ ] **Two-way chat commands (`!help/standings/record/power/matchup/trade/hof`)** —
   `npm run preview-chat-commands`. Verify live: priming on startup (no backlog reply), dedup ring,
   read-retry resilience, offseason→in-season standings source switch.

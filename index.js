@@ -162,10 +162,20 @@ const config = {
     process.env.TRADE_NOTIFICATION_MODE,
     "text"
   ),
-  tradePrimeTimeSendHourEt: Math.max(
-    0,
-    Math.min(23, parseInteger(process.env.TRADE_PRIME_TIME_SEND_HOUR_ET, 16))
+  // Review-then-post pacing: every new trade waits this long before posting
+  // (that pause is the commissioner's veto window), and back-to-back trades
+  // release this far apart instead of bursting.
+  tradeSendDelayMinutes: Math.max(
+    1,
+    parseInteger(process.env.TRADE_SEND_DELAY_MINUTES, 5)
   ),
+  // Chat that receives the pending-trade heads-up and is watched for "!veto".
+  // Falls back to the test chat; blank both → trades post after the delay with
+  // no veto window.
+  tradeReviewChatId:
+    process.env.TRADE_REVIEW_CHAT_ID?.trim() ||
+    process.env.TEST_SNAPCHAT_GROUP_CHAT_ID?.trim() ||
+    "",
   roastThreshold: parseInteger(process.env.ROAST_THRESHOLD, 750),
   headless: parseBoolean(process.env.HEADLESS, false),
   dryRun: parseBoolean(process.env.DRY_RUN, false),
@@ -314,7 +324,8 @@ async function main() {
 
   do {
     try {
-      await processQueuedManualTestTrade();
+      await processQueuedManualTestTrade(state);
+      await pollForTradeVetoes(state);
       await flushQueuedTradeNotifications(state);
       await flushMilestones();
       await pollForWeeklyReport(weeklyReportState);
@@ -327,6 +338,7 @@ async function main() {
       await pollForDraftPreview(draftPreviewState);
       await pollForDraftResultsSnapshot(draftResultsState);
       await pollForTrades(state);
+      await sendPendingTradeHeadsUps(state);
       await pollForChatCommands(chatCommandsState);
       await runFeatureModules();
 
@@ -350,7 +362,7 @@ async function main() {
     console.log(
       `Sleeping for ${Math.round(config.pollIntervalMs / 1000)} second(s).`
     );
-    await sleepWithManualTriggerChecks(config.pollIntervalMs);
+    await sleepWithManualTriggerChecks(config.pollIntervalMs, state);
   } while (true);
 
   await shutdown();
@@ -598,39 +610,22 @@ async function pollForTrades(state) {
         continue;
       }
 
-      const releaseAtTimestampMs = resolveTradeNotificationReleaseAtTimestampMs(
-        trade
-      );
-      if (
-        Number.isFinite(releaseAtTimestampMs) &&
-        releaseAtTimestampMs > Date.now()
-      ) {
-        queueTradeNotification(state, {
-          transactionId: String(trade.transaction_id),
-          acceptedAtTimestampMs: getTradeAcceptedTimestampMs(trade),
-          releaseAtTimestampMs,
-          analysis,
-        });
-        await saveState(state);
-        console.log(
-          `Queued trade ${trade.transaction_id} for ${formatTimestamp(
-            releaseAtTimestampMs
-          )}.`
-        );
-        continue;
-      }
-
-      const delivered = await deliverTradeNotification(analysis);
-      if (!delivered) {
-        console.warn(
-          `Trade ${trade.transaction_id} was not marked as sent because every delivery path failed.`
-        );
-        continue;
-      }
-
-      state.sentTransactionIds.add(String(trade.transaction_id));
+      // Every trade goes through the queue — the delay before release is the
+      // commissioner's veto window, so there is deliberately no instant path.
+      const releaseAtTimestampMs =
+        resolveTradeNotificationReleaseAtTimestampMs(state);
+      queueTradeNotification(state, {
+        transactionId: String(trade.transaction_id),
+        acceptedAtTimestampMs: getTradeAcceptedTimestampMs(trade),
+        releaseAtTimestampMs,
+        analysis,
+      });
       await saveState(state);
-      console.log(`Trade ${trade.transaction_id} recorded as sent.`);
+      console.log(
+        `Queued trade ${trade.transaction_id} for ${formatTimestamp(
+          releaseAtTimestampMs
+        )}.`
+      );
     } catch (error) {
       console.error(`Unable to process trade ${trade.transaction_id}.`);
       console.error(error);
@@ -2161,7 +2156,7 @@ function baselineMilestoneState({ report, season, latestCompletedWeek, queue }) 
   };
 }
 
-async function deliverTradeNotification(analysis) {
+async function deliverTradeNotification(analysis, { chatId } = {}) {
   if (config.dryRun) {
     if (config.tradeNotificationMode === "image") {
       const imagePath = await renderTradeCardForDelivery(
@@ -2183,12 +2178,14 @@ async function deliverTradeNotification(analysis) {
     if (config.tradeNotificationMode === "image") {
       await sendTradeCardMessage(
         analysis,
-        `trade card for trade ${analysis.tradeId}`
+        `trade card for trade ${analysis.tradeId}`,
+        { chatId }
       );
     } else {
       await sendChatMessage(
         analysis.textMessage,
-        `trade text for trade ${analysis.tradeId}`
+        `trade text for trade ${analysis.tradeId}`,
+        { chatId }
       );
     }
   } catch (error) {
@@ -2203,7 +2200,8 @@ async function deliverTradeNotification(analysis) {
     try {
       await sendChatMessage(
         analysis.roastText,
-        `roast follow-up for trade ${analysis.tradeId}`
+        `roast follow-up for trade ${analysis.tradeId}`,
+        { chatId }
       );
     } catch (error) {
       console.warn(`Roast follow-up failed for trade ${analysis.tradeId}.`);
@@ -2233,20 +2231,24 @@ async function flushQueuedTradeNotifications(state) {
 
   if (dueNotifications.length > 1) {
     console.log(
-      `${dueNotifications.length} queued trade notification(s) are due for ${formatTradePrimeTimeLabel(
-        config.tradePrimeTimeSendHourEt
-      )}; sending one this cycle, the rest will follow on later cycles.`
+      `${dueNotifications.length} queued trade notification(s) are due; sending one this cycle, the rest will follow on later cycles.`
     );
   }
 
-  // Send at most one queued trade per poll cycle. Multiple trades accepted the
-  // same day all release at the same prime-time slot, so without this they'd
-  // fire back-to-back in a tight loop — which both looks like spam and risks
-  // Snapchat's UI dropping a send when the textbox hasn't settled from the last
-  // one (the same issue we hit testing milestone alerts).
+  // Send at most one queued trade per poll cycle. Scheduling already spaces
+  // releases TRADE_SEND_DELAY_MINUTES apart, but a backlog can still pile up
+  // (e.g. after downtime) — without this they'd fire back-to-back in a tight
+  // loop, which both looks like spam and risks Snapchat's UI dropping a send
+  // when the textbox hasn't settled from the last one (the same issue we hit
+  // testing milestone alerts).
   const [notification] = dueNotifications;
   try {
-    const delivered = await deliverTradeNotification(notification.analysis);
+    const delivered = await deliverTradeNotification(notification.analysis, {
+      // Queued manual tests must never release into the league chat.
+      chatId: notification.isManualTest
+        ? resolveNotificationChatId("test")
+        : undefined,
+    });
     if (!delivered) {
       console.warn(
         `Queued trade ${notification.transactionId} will stay pending because delivery failed.`
@@ -2266,7 +2268,275 @@ async function flushQueuedTradeNotifications(state) {
   }
 }
 
-async function processQueuedManualTestTrade() {
+// One review heads-up per cycle (send-burst rule) for queued trades that
+// haven't announced themselves yet. Sending it (re)arms the veto window: the
+// release moves to a full delay after the heads-up lands, so the commissioner
+// always gets the whole window even when earlier send attempts failed.
+async function sendPendingTradeHeadsUps(state) {
+  if (!config.tradeReviewChatId) {
+    return;
+  }
+
+  const pending = (state.queuedTradeNotifications ?? [])
+    .filter((notification) => !notification.headsUpSentAt)
+    .sort(compareQueuedTradeNotifications);
+  if (pending.length === 0) {
+    return;
+  }
+
+  // The heads-up is the veto epoch: any "!veto" already visible in the review
+  // chat predates it and must never cancel this trade, so seed the signature
+  // ring once before the first heads-up ever goes out.
+  if (!state.vetoPrimed && !config.dryRun) {
+    const primed = await primeTradeVetoListener(state);
+    if (!primed) {
+      return;
+    }
+  }
+
+  const [notification] = pending;
+  const releaseAtTimestampMs = Math.max(
+    Number(notification.releaseAtTimestampMs) || 0,
+    Date.now() + getTradeSendDelayMs()
+  );
+  const headsUpMessage = buildTradeHeadsUpMessage(
+    notification,
+    releaseAtTimestampMs
+  );
+
+  if (config.dryRun) {
+    console.log(`[Dry Run] ${headsUpMessage}`);
+  } else {
+    try {
+      await sendChatMessage(
+        headsUpMessage,
+        `review heads-up for trade ${notification.transactionId}`,
+        { chatId: config.tradeReviewChatId }
+      );
+    } catch (error) {
+      console.warn(
+        `Review heads-up failed for trade ${notification.transactionId}; will retry next cycle.`
+      );
+      console.warn(error.message);
+      return;
+    }
+  }
+
+  notification.headsUpSentAt = new Date().toISOString();
+  notification.releaseAtTimestampMs = releaseAtTimestampMs;
+  await saveState(state);
+  console.log(
+    `Review heads-up sent for trade ${notification.transactionId}; releases at ${formatTimestamp(
+      releaseAtTimestampMs
+    )} unless vetoed.`
+  );
+}
+
+async function primeTradeVetoListener(state) {
+  let messages;
+  try {
+    messages = await readChatMessagesWithRetry(config.tradeReviewChatId);
+  } catch (error) {
+    console.warn("Trade veto priming read failed; will retry next cycle.");
+    console.warn(error.message);
+    return false;
+  }
+
+  const handled = new Set(state.handledVetoSignatures ?? []);
+  for (const message of messages) {
+    if (parseVetoCommand(message)) {
+      handled.add(commandSignature(message));
+    }
+  }
+
+  state.vetoPrimed = true;
+  state.handledVetoSignatures = Array.from(handled).slice(-200);
+  await saveState(state);
+  console.log("Trade veto listener primed against the review chat.");
+  return true;
+}
+
+// While any trade is queued, watch the review chat for "!veto [tag]". A veto
+// records the trade as sent without ever posting it to the league chat. Tagged
+// vetoes are matched against the live queue (idempotent — a message that
+// already vetoed its trade matches nothing next cycle); the signature ring
+// gates replies and bare "!veto", mirroring pollForChatCommands.
+async function pollForTradeVetoes(state) {
+  if (!config.tradeReviewChatId || config.dryRun || !state.vetoPrimed) {
+    return;
+  }
+
+  if ((state.queuedTradeNotifications ?? []).length === 0) {
+    return;
+  }
+
+  let messages;
+  try {
+    messages = await readChatMessagesWithRetry(config.tradeReviewChatId);
+  } catch (error) {
+    console.warn("Trade veto read failed; will retry next cycle.");
+    console.warn(error.message);
+    await deferDueReleasesAfterFailedVetoCheck(state);
+    return;
+  }
+
+  const handled = new Set(state.handledVetoSignatures ?? []);
+  const replies = [];
+  let stateChanged = false;
+
+  for (const message of messages) {
+    const parsed = parseVetoCommand(message);
+    if (!parsed) {
+      continue;
+    }
+
+    const signature = commandSignature(message);
+    const isFresh = !handled.has(signature);
+    if (isFresh) {
+      handled.add(signature);
+      stateChanged = true;
+    }
+
+    const tag = parsed.argString.replace(/[^0-9a-z]/gi, "");
+    if (tag) {
+      const match = (state.queuedTradeNotifications ?? []).find(
+        (notification) => String(notification.transactionId).endsWith(tag)
+      );
+      if (match) {
+        vetoQueuedTradeNotification(state, match);
+        stateChanged = true;
+        replies.push(buildVetoConfirmation(match));
+        console.log(`Trade ${match.transactionId} vetoed by ${message.from}.`);
+      } else if (isFresh) {
+        replies.push(
+          `No pending trade matches "${tag}". ${describePendingTrades(state)}`
+        );
+      }
+      continue;
+    }
+
+    if (!isFresh) {
+      continue;
+    }
+
+    const remaining = state.queuedTradeNotifications ?? [];
+    if (remaining.length === 1) {
+      const [only] = remaining;
+      vetoQueuedTradeNotification(state, only);
+      stateChanged = true;
+      replies.push(buildVetoConfirmation(only));
+      console.log(`Trade ${only.transactionId} vetoed by ${message.from}.`);
+    } else if (remaining.length === 0) {
+      replies.push(
+        "Nothing is pending — that trade was already vetoed or posted."
+      );
+    } else {
+      replies.push(
+        `${remaining.length} trades are pending — reply with ${config.chatCommandPrefix}veto <tag>. ${describePendingTrades(state)}`
+      );
+    }
+  }
+
+  if (stateChanged) {
+    state.handledVetoSignatures = Array.from(handled).slice(-200);
+    await saveState(state);
+  }
+
+  for (const reply of replies) {
+    try {
+      await sendChatMessage(reply, "trade veto reply", {
+        chatId: config.tradeReviewChatId,
+      });
+    } catch (error) {
+      console.warn("Trade veto reply failed.");
+      console.warn(error.message);
+    }
+  }
+}
+
+// A trade must not release on a cycle where the veto check couldn't run — with
+// long poll intervals a single transient read failure would otherwise burn the
+// whole veto window. Push any due release out one delay, but only a few times
+// so a perma-broken review chat can't hold trades hostage forever.
+const MAX_VETO_CHECK_DEFERRALS = 3;
+
+async function deferDueReleasesAfterFailedVetoCheck(state) {
+  const now = Date.now();
+  let changed = false;
+
+  for (const notification of state.queuedTradeNotifications ?? []) {
+    const deferrals = Number(notification.vetoCheckDeferrals ?? 0);
+    if (
+      Number.isFinite(notification.releaseAtTimestampMs) &&
+      notification.releaseAtTimestampMs <= now &&
+      deferrals < MAX_VETO_CHECK_DEFERRALS
+    ) {
+      notification.releaseAtTimestampMs = now + getTradeSendDelayMs();
+      notification.vetoCheckDeferrals = deferrals + 1;
+      changed = true;
+      console.warn(
+        `Deferring release of trade ${notification.transactionId} (${
+          deferrals + 1
+        }/${MAX_VETO_CHECK_DEFERRALS}) until a veto check succeeds.`
+      );
+    }
+  }
+
+  if (changed) {
+    await saveState(state);
+  }
+}
+
+function parseVetoCommand(message) {
+  if (String(message?.from ?? "").trim().toLowerCase() === "me") {
+    return null;
+  }
+
+  const parsed = parseCommand(message?.text, config.chatCommandPrefix);
+  return parsed?.name === "veto" ? parsed : null;
+}
+
+// Vetoing = record the trade as sent without delivering it, so pollForTrades
+// never re-queues it. The trade still lands in trade-history.json with its
+// grade — a veto only suppresses the chat post.
+function vetoQueuedTradeNotification(state, notification) {
+  state.sentTransactionIds.add(String(notification.transactionId));
+  removeQueuedTradeNotification(state, notification.transactionId);
+}
+
+function buildTradeHeadsUpMessage(notification, releaseAtTimestampMs) {
+  const vetoTag = tradeVetoTag(notification.transactionId);
+  return [
+    `⏳ Trade pending — posting to the league chat at ${formatTimestamp(
+      releaseAtTimestampMs
+    )}.`,
+    "",
+    notification.analysis?.textMessage ??
+      `Trade ${notification.transactionId}`,
+    "",
+    `Reply "${config.chatCommandPrefix}veto ${vetoTag}" here to keep it out of the league chat.`,
+  ].join("\n");
+}
+
+function buildVetoConfirmation(notification) {
+  return `🚫 Vetoed — trade …${tradeVetoTag(
+    notification.transactionId
+  )} will not be posted to the league chat.`;
+}
+
+function tradeVetoTag(transactionId) {
+  const id = String(transactionId ?? "").trim();
+  return id.length > 4 ? id.slice(-4) : id;
+}
+
+function describePendingTrades(state) {
+  const tags = (state.queuedTradeNotifications ?? []).map(
+    (notification) => `…${tradeVetoTag(notification.transactionId)}`
+  );
+  return tags.length > 0 ? `Pending: ${tags.join(", ")}.` : "Pending: none.";
+}
+
+async function processQueuedManualTestTrade(state) {
   let payload = null;
 
   try {
@@ -2291,6 +2561,31 @@ async function processQueuedManualTestTrade() {
   if (!tradeMessage) {
     console.warn("Manual test trade trigger was empty. Removing it.");
     await fs.unlink(MANUAL_TEST_TRIGGER_FILE).catch(() => {});
+    return;
+  }
+
+  // --queue routes the fake trade through the real review pipeline (queue →
+  // heads-up → veto window → timed release) instead of sending immediately.
+  // The release still targets the test chat (isManualTest), never the league.
+  if (payload?.queue) {
+    const transactionId = `manual-test-${Date.now()}`;
+    queueTradeNotification(state, {
+      transactionId,
+      acceptedAtTimestampMs: Date.now(),
+      releaseAtTimestampMs: resolveTradeNotificationReleaseAtTimestampMs(state),
+      analysis: {
+        ...(tradeCardAnalysis ?? {}),
+        tradeId: transactionId,
+        textMessage: tradeMessage,
+        roastText: shouldSendRoast ? roastMessage : null,
+      },
+      isManualTest: true,
+    });
+    await saveState(state);
+    await fs.unlink(MANUAL_TEST_TRIGGER_FILE).catch(() => {});
+    console.log(
+      `Manual test trade ${transactionId} queued through the review window.`
+    );
     return;
   }
 
@@ -3107,6 +3402,10 @@ async function loadState() {
       queuedTradeNotifications: normalizeQueuedTradeNotifications(
         parsed.queuedTradeNotifications
       ),
+      vetoPrimed: Boolean(parsed.vetoPrimed),
+      handledVetoSignatures: Array.isArray(parsed.handledVetoSignatures)
+        ? parsed.handledVetoSignatures.map(String)
+        : [],
     };
   } catch (error) {
     return {
@@ -3114,6 +3413,8 @@ async function loadState() {
       initializedAt: null,
       sentTransactionIds: new Set(),
       queuedTradeNotifications: [],
+      vetoPrimed: false,
+      handledVetoSignatures: [],
     };
   }
 }
@@ -3128,6 +3429,8 @@ async function saveState(state) {
     queuedTradeNotifications: [...(state.queuedTradeNotifications ?? [])].sort(
       compareQueuedTradeNotifications
     ),
+    vetoPrimed: Boolean(state.vetoPrimed),
+    handledVetoSignatures: state.handledVetoSignatures ?? [],
   };
 
   await fs.writeFile(STATE_FILE, JSON.stringify(serialized, null, 2), "utf8");
@@ -3664,7 +3967,13 @@ function hasQueuedTradeNotification(state, transactionId) {
 
 function queueTradeNotification(
   state,
-  { transactionId, acceptedAtTimestampMs, releaseAtTimestampMs, analysis }
+  {
+    transactionId,
+    acceptedAtTimestampMs,
+    releaseAtTimestampMs,
+    analysis,
+    isManualTest = false,
+  }
 ) {
   if (!Array.isArray(state.queuedTradeNotifications)) {
     state.queuedTradeNotifications = [];
@@ -3677,6 +3986,8 @@ function queueTradeNotification(
       Number.isFinite(acceptedAtTimestampMs) ? acceptedAtTimestampMs : null,
     releaseAtTimestampMs,
     queuedAt: new Date().toISOString(),
+    headsUpSentAt: null,
+    isManualTest: Boolean(isManualTest),
     analysis,
   });
   state.queuedTradeNotifications.sort(compareQueuedTradeNotifications);
@@ -3720,6 +4031,9 @@ function normalizeQueuedTradeNotifications(value) {
         : null,
       releaseAtTimestampMs: Number(entry?.releaseAtTimestampMs),
       queuedAt: entry?.queuedAt ?? null,
+      headsUpSentAt: entry?.headsUpSentAt ?? null,
+      isManualTest: Boolean(entry?.isManualTest),
+      vetoCheckDeferrals: Number(entry?.vetoCheckDeferrals) || 0,
       analysis: entry?.analysis ?? null,
     }))
     .filter(
@@ -3737,25 +4051,24 @@ function getTradeAcceptedTimestampMs(trade) {
   return Number.isFinite(timestamp) ? timestamp : null;
 }
 
-function resolveTradeNotificationReleaseAtTimestampMs(trade) {
-  const acceptedAtTimestampMs = getTradeAcceptedTimestampMs(trade);
-  if (!Number.isFinite(acceptedAtTimestampMs)) {
-    return null;
-  }
+// A new trade releases one delay from now, and never closer than one delay
+// after the last trade already waiting — a multi-trade batch trickles out one
+// every TRADE_SEND_DELAY_MINUTES instead of bursting.
+function resolveTradeNotificationReleaseAtTimestampMs(state) {
+  const latestQueuedReleaseAtMs = Math.max(
+    0,
+    ...(state.queuedTradeNotifications ?? []).map((notification) =>
+      Number(notification?.releaseAtTimestampMs ?? 0)
+    )
+  );
 
-  const easternParts = getEasternDateParts(new Date(acceptedAtTimestampMs));
-  if (easternParts.hour >= config.tradePrimeTimeSendHourEt) {
-    return null;
-  }
+  return (
+    Math.max(Date.now(), latestQueuedReleaseAtMs) + getTradeSendDelayMs()
+  );
+}
 
-  return getEasternTimestampForLocalDateTime({
-    year: easternParts.year,
-    month: easternParts.month,
-    day: easternParts.day,
-    hour: config.tradePrimeTimeSendHourEt,
-    minute: 0,
-    second: 0,
-  });
+function getTradeSendDelayMs() {
+  return config.tradeSendDelayMinutes * 60 * 1000;
 }
 
 function getEasternDateParts(date) {
@@ -3782,50 +4095,6 @@ function getEasternDateParts(date) {
     minute: Number(getPart("minute")),
     second: Number(getPart("second")),
   };
-}
-
-function getEasternTimestampForLocalDateTime({
-  year,
-  month,
-  day,
-  hour,
-  minute = 0,
-  second = 0,
-}) {
-  const noonUtcDate = new Date(Date.UTC(year, month - 1, day, 12, 0, 0));
-  const offsetMinutes = getTimeZoneOffsetMinutes(noonUtcDate, EASTERN_TIME_ZONE);
-
-  return (
-    Date.UTC(year, month - 1, day, hour, minute, second) -
-    offsetMinutes * 60 * 1000
-  );
-}
-
-function getTimeZoneOffsetMinutes(date, timeZone) {
-  const formatter = new Intl.DateTimeFormat("en-US", {
-    timeZone,
-    timeZoneName: "shortOffset",
-    hour: "2-digit",
-  });
-  const value =
-    formatter.formatToParts(date).find((part) => part.type === "timeZoneName")
-      ?.value ?? "GMT";
-  const match = value.match(/^GMT([+-])(\d{1,2})(?::?(\d{2}))?$/i);
-  if (!match) {
-    return 0;
-  }
-
-  const sign = match[1] === "-" ? -1 : 1;
-  const hours = Number(match[2] ?? 0);
-  const minutes = Number(match[3] ?? 0);
-  return sign * (hours * 60 + minutes);
-}
-
-function formatTradePrimeTimeLabel(hour24) {
-  const normalizedHour = ((Number(hour24) % 24) + 24) % 24;
-  const hour12 = normalizedHour % 12 || 12;
-  const meridiem = normalizedHour >= 12 ? "PM" : "AM";
-  return `${hour12}:00 ${meridiem} ET`;
 }
 
 function resolveNotificationChatId(audience) {
@@ -4061,7 +4330,7 @@ function delay(milliseconds) {
   });
 }
 
-async function sleepWithManualTriggerChecks(totalMilliseconds) {
+async function sleepWithManualTriggerChecks(totalMilliseconds, state) {
   const deadline = Date.now() + totalMilliseconds;
 
   while (Date.now() < deadline) {
@@ -4071,7 +4340,7 @@ async function sleepWithManualTriggerChecks(totalMilliseconds) {
     );
 
     try {
-      await processQueuedManualTestTrade();
+      await processQueuedManualTestTrade(state);
     } catch (error) {
       console.warn("Manual test trade check failed during sleep.");
       console.warn(error.message);

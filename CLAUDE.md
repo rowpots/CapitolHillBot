@@ -18,8 +18,8 @@ engineering map — keep it lean.
 
 ## Key files
 
-- `index.js` — live loop: poll Sleeper, grade trades, prime-time send queue, and call every
-  `pollForX` + `runFeatureModules()`.
+- `index.js` — live loop: poll Sleeper, grade trades, review-window send queue (+ `!veto`), and
+  call every `pollForX` + `runFeatureModules()`.
 - `weekly-report.js` — standings, Monte Carlo playoff odds, weekly recap, power rankings, **and the
   shared label/pairing/ET-time helpers** (`formatRosterLabel`, `normalizeWeekEntries`,
   `groupWeekEntriesByMatchup`, `getEasternDateParts`, `isWeekdayAtOrAfterTimeInEastern`, …) reused
@@ -70,7 +70,7 @@ All gated by an `.env` toggle, dedup'd via per-`(season, week)` or `sentBySeason
 
 | Feature | File | Cadence / trigger | Toggle | State file |
 |---|---|---|---|---|
-| Trade notify + grade | `index.js`, `trade-card.js` | live, prime-time queue | (core) | `runtime-state.json`, `trade-history.json` |
+| Trade notify + grade | `index.js`, `trade-card.js` | live, 5-min review queue + `!veto` | (core) | `runtime-state.json`, `trade-history.json` |
 | Weekly report + recap | `weekly-report.js` | Tue, wks 1-14 | `WEEKLY_REPORTS_ENABLED` | `weekly-report-state.json` |
 | Power rankings | `weekly-report.js` | Thu, wks 2-14 | `POWER_RANKINGS_ENABLED` | `power-rankings-state.json` |
 | Milestone alerts | `milestones.js` | event, drip on week-final | `PLAYOFF_ALERTS_ENABLED`, `RECORD_BOOK_ENABLED` | `milestone-state.json`, `record-book.json` |
@@ -124,6 +124,17 @@ All gated by an `.env` toggle, dedup'd via per-`(season, week)` or `sentBySeason
 - **Milestones**: detect once at week-final (inside `pollForWeeklyReport`), queue each with a
   daytime release slot, drip one per cycle. Playoff clinch/elim only from Week ≥8. First run
   `baselineMilestoneState` (silent). Record book seeded all-time from the chain.
+- **Trade review/veto**: every trade queues `TRADE_SEND_DELAY_MINUTES` (default 5) before posting —
+  **no instant path**, the delay *is* the veto window; batches release one per delay. Heads-up +
+  `!veto` listener live in `TRADE_REVIEW_CHAT_ID` (falls back to the test chat; blank both = no
+  veto, just the delay). The **heads-up is the veto epoch**: `primeTradeVetoListener` seeds the
+  signature ring before the first heads-up ever sends, so pre-existing `!veto` texts can't kill a
+  new trade. Tagged vetoes (`!veto <last-4>`) match the live queue idempotently; the ring only
+  gates replies + bare `!veto` — so a *repeated identical* bare `!veto` from the same sender can be
+  swallowed by dedup (heads-up therefore instructs the tagged form). Vetoed = added to
+  `sentTransactionIds` (never re-queued, still graded into `trade-history.json`). Manual test:
+  `npm run test-trade -- --queue` runs the pipeline but releases to the **test** chat
+  (`isManualTest` on the queue entry).
 
 ## Feature-module registry + live in-game scoring
 

@@ -34,12 +34,17 @@ async function main() {
       String(process.env.SEND_TEST_ROAST ?? "true").toLowerCase()
     );
 
+  // --queue exercises the full review pipeline (heads-up in the review chat,
+  // !veto window, timed release to the test chat) instead of sending at once.
+  const shouldQueue = args.has("--queue");
+
   const payload = {
     queuedAt: new Date().toISOString(),
     tradeMessage,
     tradeCardAnalysis: buildDefaultTradeCardAnalysis(),
     roastMessage,
     sendRoast: shouldSendRoast,
+    queue: shouldQueue,
   };
 
   await fs.writeFile(
@@ -49,9 +54,15 @@ async function main() {
   );
 
   console.log("Queued a manual test trade for the live bot.");
-  console.log(
-    "If the bot is already running, it should send within about 5 seconds."
-  );
+  if (shouldQueue) {
+    console.log(
+      "Review mode: the bot will post a heads-up to the review chat, hold the trade for the veto window, then release it to the test chat."
+    );
+  } else {
+    console.log(
+      "If the bot is already running, it should send within about 5 seconds."
+    );
+  }
 }
 
 function buildDefaultTradeMessage() {
