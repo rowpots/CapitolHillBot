@@ -17,3 +17,87 @@ Error: Timed out waiting for the Snapchat chat list after 60000ms.
     at SnapBot.waitForChatList (file:///C:/Users/rowan/OneDrive/Desktop/tradebot/SnapBot/snapbot.js:826:11)
     at async startSnapchatSession (file:///C:/Users/rowan/OneDrive/Desktop/tradebot/SnapBot/index.js:148:3)
     at async main (file:///C:/Users/rowan/OneDrive/Desktop/tradebot/SnapBot/index.js:74:5)
+[2026-07-05 17:56:16 EDT] Polling cycle failed, but the bot will keep running.
+[2026-07-05 17:56:16 EDT] Error: Network request failed for https://api.sleeper.app/v1/league/1312113855769366528: fetch failed | cause: getaddrinfo ENOTFOUND api.sleeper.app
+    at fetchJson (file:///C:/Users/rowan/OneDrive/Desktop/tradebot/SnapBot/index.js:3917:11)
+    at process.processTicksAndRejections (node:internal/process/task_queues:103:5)
+    at async pollForDraftPreview (file:///C:/Users/rowan/OneDrive/Desktop/tradebot/SnapBot/index.js:1507:18)
+    at async main (file:///C:/Users/rowan/OneDrive/Desktop/tradebot/SnapBot/index.js:342:7) {
+  [cause]: TypeError: fetch failed
+      at node:internal/deps/undici/undici:15845:13
+      at process.processTicksAndRejections (node:internal/process/task_queues:103:5)
+      at async fetchJson (file:///C:/Users/rowan/OneDrive/Desktop/tradebot/SnapBot/index.js:3909:16)
+      at async pollForDraftPreview (file:///C:/Users/rowan/OneDrive/Desktop/tradebot/SnapBot/index.js:1507:18)
+      at async main (file:///C:/Users/rowan/OneDrive/Desktop/tradebot/SnapBot/index.js:342:7) {
+    [cause]: Error: getaddrinfo ENOTFOUND api.sleeper.app
+        at GetAddrInfoReqWrap.onlookupall [as oncomplete] (node:dns:122:26) {
+      errno: -3008,
+      code: 'ENOTFOUND',
+      syscall: 'getaddrinfo',
+      hostname: 'api.sleeper.app'
+    }
+  }
+}
+[2026-07-05 19:25:54 EDT] Polling cycle failed, but the bot will keep running.
+[2026-07-05 19:25:54 EDT] Error: Network request failed for https://api.sleeper.app/v1/league/1312113855769366528: fetch failed | cause: getaddrinfo ENOTFOUND api.sleeper.app
+    at fetchJson (file:///C:/Users/rowan/OneDrive/Desktop/tradebot/SnapBot/index.js:3917:11)
+    at process.processTicksAndRejections (node:internal/process/task_queues:103:5)
+    at async pollForDraftPreview (file:///C:/Users/rowan/OneDrive/Desktop/tradebot/SnapBot/index.js:1507:18)
+    at async main (file:///C:/Users/rowan/OneDrive/Desktop/tradebot/SnapBot/index.js:342:7) {
+  [cause]: TypeError: fetch failed
+      at node:internal/deps/undici/undici:15845:13
+      at process.processTicksAndRejections (node:internal/process/task_queues:103:5)
+      at async fetchJson (file:///C:/Users/rowan/OneDrive/Desktop/tradebot/SnapBot/index.js:3909:16)
+      at async pollForDraftPreview (file:///C:/Users/rowan/OneDrive/Desktop/tradebot/SnapBot/index.js:1507:18)
+      at async main (file:///C:/Users/rowan/OneDrive/Desktop/tradebot/SnapBot/index.js:342:7) {
+    [cause]: Error: getaddrinfo ENOTFOUND api.sleeper.app
+        at GetAddrInfoReqWrap.onlookupall [as oncomplete] (node:dns:122:26) {
+      errno: -3008,
+      code: 'ENOTFOUND',
+      syscall: 'getaddrinfo',
+      hostname: 'api.sleeper.app'
+    }
+  }
+}
+[2026-07-05 22:21:16 EDT] Polling cycle failed, but the bot will keep running.
+[2026-07-05 22:21:16 EDT] Error: Network request failed for https://api.sleeper.app/v1/league/1312113855769366528: fetch failed | cause: getaddrinfo ENOTFOUND api.sleeper.app
+    at fetchJson (file:///C:/Users/rowan/OneDrive/Desktop/tradebot/SnapBot/index.js:3917:11)
+    at process.processTicksAndRejections (node:internal/process/task_queues:103:5)
+    at async pollForDraftPreview (file:///C:/Users/rowan/OneDrive/Desktop/tradebot/SnapBot/index.js:1507:18)
+    at async main (file:///C:/Users/rowan/OneDrive/Desktop/tradebot/SnapBot/index.js:342:7) {
+  [cause]: TypeError: fetch failed
+      at node:internal/deps/undici/undici:15845:13
+      at process.processTicksAndRejections (node:internal/process/task_queues:103:5)
+      at async fetchJson (file:///C:/Users/rowan/OneDrive/Desktop/tradebot/SnapBot/index.js:3909:16)
+      at async pollForDraftPreview (file:///C:/Users/rowan/OneDrive/Desktop/tradebot/SnapBot/index.js:1507:18)
+      at async main (file:///C:/Users/rowan/OneDrive/Desktop/tradebot/SnapBot/index.js:342:7) {
+    [cause]: Error: getaddrinfo ENOTFOUND api.sleeper.app
+        at GetAddrInfoReqWrap.onlookupall [as oncomplete] (node:dns:122:26) {
+      errno: -3008,
+      code: 'ENOTFOUND',
+      syscall: 'getaddrinfo',
+      hostname: 'api.sleeper.app'
+    }
+  }
+}
+[2026-07-05 22:41:33 EDT] Polling cycle failed, but the bot will keep running.
+[2026-07-05 22:41:33 EDT] Error: Network request failed for https://api.sleeper.app/v1/league/1312113855769366528: fetch failed | cause: getaddrinfo ENOTFOUND api.sleeper.app
+    at fetchJson (file:///C:/Users/rowan/OneDrive/Desktop/tradebot/SnapBot/index.js:3917:11)
+    at process.processTicksAndRejections (node:internal/process/task_queues:103:5)
+    at async pollForDraftPreview (file:///C:/Users/rowan/OneDrive/Desktop/tradebot/SnapBot/index.js:1507:18)
+    at async main (file:///C:/Users/rowan/OneDrive/Desktop/tradebot/SnapBot/index.js:342:7) {
+  [cause]: TypeError: fetch failed
+      at node:internal/deps/undici/undici:15845:13
+      at process.processTicksAndRejections (node:internal/process/task_queues:103:5)
+      at async fetchJson (file:///C:/Users/rowan/OneDrive/Desktop/tradebot/SnapBot/index.js:3909:16)
+      at async pollForDraftPreview (file:///C:/Users/rowan/OneDrive/Desktop/tradebot/SnapBot/index.js:1507:18)
+      at async main (file:///C:/Users/rowan/OneDrive/Desktop/tradebot/SnapBot/index.js:342:7) {
+    [cause]: Error: getaddrinfo ENOTFOUND api.sleeper.app
+        at GetAddrInfoReqWrap.onlookupall [as oncomplete] (node:dns:122:26) {
+      errno: -3008,
+      code: 'ENOTFOUND',
+      syscall: 'getaddrinfo',
+      hostname: 'api.sleeper.app'
+    }
+  }
+}

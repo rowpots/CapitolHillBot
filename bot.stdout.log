@@ -41,3 +41,225 @@ No blocking popup found.
 No blocking popup found.
 No blocking popup found.
 Snapchat closed
+
+> snapbot@1.0.0 bot
+> node index.js
+
+[2026-07-05 14:39:58 EDT] Launching Snapchat Web.
+[2026-07-05 14:39:58 EDT] Cookies set
+[2026-07-05 14:40:00 EDT] Snapchat for Web Build info: Snapchat v13.79.0 (prod ea72679b) built on 6/29/2026, 5:11:03 PM PDT (1782778263231) (loaded: 0d3a4lv4i)
+[2026-07-05 14:40:00 EDT] Version v13.79.0
+[2026-07-05 14:40:00 EDT] Snapchat for Web Build info: Snapchat v13.79.0 (prod ea72679b) built on 6/29/2026, 5:11:03 PM PDT (1782778263231) (loaded: njh373m6g)
+[2026-07-05 14:40:00 EDT] Version v13.79.0
+[2026-07-05 14:40:01 EDT] No blocking popup found.
+[2026-07-05 14:40:02 EDT] Snapchat session restored from an existing login.
+[2026-07-05 14:40:02 EDT] Dismissed popup using "Not now".
+[2026-07-05 14:40:02 EDT] Waiting up to 600 second(s) for Snapchat to finish login and load chats.
+[2026-07-05 14:40:02 EDT] Complete any manual login, 2FA, or verification steps in the browser window if prompted.
+[2026-07-05 14:40:03 EDT] Snapchat for Web Build info: Snapchat v13.79.0 (prod ea72679b) built on 6/29/2026, 5:11:03 PM PDT (1782778263231) (loaded: n2yuxl65j)
+[2026-07-05 14:40:03 EDT] Version v13.79.0
+[2026-07-05 14:40:03 EDT] Dismissed popup using "Not now".
+[2026-07-05 14:40:04 EDT] cookies saved for :  capitolhillbot
+[2026-07-05 14:40:04 EDT] Loaded 7 known transaction id(s).
+[2026-07-05 14:40:05 EDT] Checking Sleeper league 1312113855769366528 for completed trades.
+[2026-07-05 14:40:05 EDT] No new completed trades found.
+[2026-07-05 14:40:05 EDT] Sleeping for 300 second(s).
+[2026-07-05 14:45:05 EDT] Checking Sleeper league 1312113855769366528 for completed trades.
+[2026-07-05 14:45:06 EDT] No new completed trades found.
+[2026-07-05 14:45:06 EDT] Sleeping for 300 second(s).
+[2026-07-05 14:50:06 EDT] Checking Sleeper league 1312113855769366528 for completed trades.
+[2026-07-05 14:50:07 EDT] No new completed trades found.
+[2026-07-05 14:50:07 EDT] Sleeping for 300 second(s).
+[2026-07-05 14:55:07 EDT] Checking Sleeper league 1312113855769366528 for completed trades.
+[2026-07-05 14:55:07 EDT] No new completed trades found.
+[2026-07-05 14:55:07 EDT] Sleeping for 300 second(s).
+[2026-07-05 15:00:08 EDT] Checking Sleeper league 1312113855769366528 for completed trades.
+[2026-07-05 15:00:08 EDT] No new completed trades found.
+[2026-07-05 15:00:08 EDT] Sleeping for 300 second(s).
+[2026-07-05 15:05:08 EDT] Checking Sleeper league 1312113855769366528 for completed trades.
+[2026-07-05 15:05:09 EDT] No new completed trades found.
+[2026-07-05 15:05:09 EDT] Sleeping for 300 second(s).
+[2026-07-05 15:10:09 EDT] Checking Sleeper league 1312113855769366528 for completed trades.
+[2026-07-05 15:10:10 EDT] No new completed trades found.
+[2026-07-05 15:10:10 EDT] Sleeping for 300 second(s).
+[2026-07-05 15:15:10 EDT] Checking Sleeper league 1312113855769366528 for completed trades.
+[2026-07-05 15:15:11 EDT] No new completed trades found.
+[2026-07-05 15:15:11 EDT] Sleeping for 300 second(s).
+[2026-07-05 15:20:11 EDT] Checking Sleeper league 1312113855769366528 for completed trades.
+[2026-07-05 15:20:12 EDT] No new completed trades found.
+[2026-07-05 15:20:12 EDT] Sleeping for 300 second(s).
+[2026-07-05 15:25:12 EDT] Checking Sleeper league 1312113855769366528 for completed trades.
+[2026-07-05 15:25:13 EDT] No new completed trades found.
+[2026-07-05 15:25:13 EDT] Sleeping for 300 second(s).
+[2026-07-05 15:30:13 EDT] Checking Sleeper league 1312113855769366528 for completed trades.
+[2026-07-05 15:30:13 EDT] No new completed trades found.
+[2026-07-05 15:30:13 EDT] Sleeping for 300 second(s).
+[2026-07-05 15:35:13 EDT] Checking Sleeper league 1312113855769366528 for completed trades.
+[2026-07-05 15:35:14 EDT] No new completed trades found.
+[2026-07-05 15:35:14 EDT] Sleeping for 300 second(s).
+[2026-07-05 15:40:14 EDT] Checking Sleeper league 1312113855769366528 for completed trades.
+[2026-07-05 15:40:15 EDT] No new completed trades found.
+[2026-07-05 15:40:15 EDT] Sleeping for 300 second(s).
+[2026-07-05 15:45:15 EDT] Checking Sleeper league 1312113855769366528 for completed trades.
+[2026-07-05 15:45:16 EDT] No new completed trades found.
+[2026-07-05 15:45:16 EDT] Sleeping for 300 second(s).
+[2026-07-05 15:50:16 EDT] Checking Sleeper league 1312113855769366528 for completed trades.
+[2026-07-05 15:50:18 EDT] No new completed trades found.
+[2026-07-05 15:50:18 EDT] Sleeping for 300 second(s).
+[2026-07-05 15:55:18 EDT] Checking Sleeper league 1312113855769366528 for completed trades.
+[2026-07-05 15:55:19 EDT] No new completed trades found.
+[2026-07-05 15:55:19 EDT] Sleeping for 300 second(s).
+[2026-07-05 16:00:19 EDT] Checking Sleeper league 1312113855769366528 for completed trades.
+[2026-07-05 16:00:19 EDT] No new completed trades found.
+[2026-07-05 16:00:19 EDT] Sleeping for 300 second(s).
+[2026-07-05 16:05:20 EDT] Checking Sleeper league 1312113855769366528 for completed trades.
+[2026-07-05 16:05:20 EDT] No new completed trades found.
+[2026-07-05 16:05:20 EDT] Sleeping for 300 second(s).
+[2026-07-05 16:10:20 EDT] Checking Sleeper league 1312113855769366528 for completed trades.
+[2026-07-05 16:10:21 EDT] No new completed trades found.
+[2026-07-05 16:10:21 EDT] Sleeping for 300 second(s).
+[2026-07-05 16:15:21 EDT] Checking Sleeper league 1312113855769366528 for completed trades.
+[2026-07-05 16:15:21 EDT] No new completed trades found.
+[2026-07-05 16:15:21 EDT] Sleeping for 300 second(s).
+[2026-07-05 16:20:22 EDT] Checking Sleeper league 1312113855769366528 for completed trades.
+[2026-07-05 16:20:22 EDT] No new completed trades found.
+[2026-07-05 16:20:22 EDT] Sleeping for 300 second(s).
+[2026-07-05 16:25:22 EDT] Checking Sleeper league 1312113855769366528 for completed trades.
+[2026-07-05 16:25:23 EDT] No new completed trades found.
+[2026-07-05 16:25:23 EDT] Sleeping for 300 second(s).
+[2026-07-05 16:30:23 EDT] Checking Sleeper league 1312113855769366528 for completed trades.
+[2026-07-05 16:30:23 EDT] No new completed trades found.
+[2026-07-05 16:30:23 EDT] Sleeping for 300 second(s).
+[2026-07-05 16:35:24 EDT] Checking Sleeper league 1312113855769366528 for completed trades.
+[2026-07-05 16:35:24 EDT] No new completed trades found.
+[2026-07-05 16:35:24 EDT] Sleeping for 300 second(s).
+[2026-07-05 16:40:24 EDT] Checking Sleeper league 1312113855769366528 for completed trades.
+[2026-07-05 16:40:25 EDT] No new completed trades found.
+[2026-07-05 16:40:25 EDT] Sleeping for 300 second(s).
+[2026-07-05 16:45:25 EDT] Checking Sleeper league 1312113855769366528 for completed trades.
+[2026-07-05 16:45:25 EDT] No new completed trades found.
+[2026-07-05 16:45:25 EDT] Sleeping for 300 second(s).
+[2026-07-05 16:50:26 EDT] Checking Sleeper league 1312113855769366528 for completed trades.
+[2026-07-05 16:50:26 EDT] No new completed trades found.
+[2026-07-05 16:50:26 EDT] Sleeping for 300 second(s).
+[2026-07-05 16:55:26 EDT] Checking Sleeper league 1312113855769366528 for completed trades.
+[2026-07-05 16:55:27 EDT] No new completed trades found.
+[2026-07-05 16:55:27 EDT] Sleeping for 300 second(s).
+[2026-07-05 17:00:27 EDT] Checking Sleeper league 1312113855769366528 for completed trades.
+[2026-07-05 17:00:27 EDT] No new completed trades found.
+[2026-07-05 17:00:27 EDT] Sleeping for 300 second(s).
+[2026-07-05 17:56:16 EDT] Sleeping for 300 second(s).
+[2026-07-05 19:25:54 EDT] Sleeping for 300 second(s).
+[2026-07-05 19:30:55 EDT] Checking Sleeper league 1312113855769366528 for completed trades.
+[2026-07-05 19:30:55 EDT] No new completed trades found.
+[2026-07-05 19:30:55 EDT] Sleeping for 300 second(s).
+[2026-07-05 19:35:55 EDT] Checking Sleeper league 1312113855769366528 for completed trades.
+[2026-07-05 19:35:56 EDT] No new completed trades found.
+[2026-07-05 19:35:56 EDT] Sleeping for 300 second(s).
+[2026-07-05 19:40:56 EDT] Checking Sleeper league 1312113855769366528 for completed trades.
+[2026-07-05 19:40:56 EDT] No new completed trades found.
+[2026-07-05 19:40:56 EDT] Sleeping for 300 second(s).
+[2026-07-05 19:45:57 EDT] Checking Sleeper league 1312113855769366528 for completed trades.
+[2026-07-05 19:45:57 EDT] No new completed trades found.
+[2026-07-05 19:45:57 EDT] Sleeping for 300 second(s).
+[2026-07-05 19:50:57 EDT] Checking Sleeper league 1312113855769366528 for completed trades.
+[2026-07-05 19:50:58 EDT] No new completed trades found.
+[2026-07-05 19:50:58 EDT] Sleeping for 300 second(s).
+[2026-07-05 19:55:58 EDT] Checking Sleeper league 1312113855769366528 for completed trades.
+[2026-07-05 19:55:59 EDT] No new completed trades found.
+[2026-07-05 19:55:59 EDT] Sleeping for 300 second(s).
+[2026-07-05 20:00:59 EDT] Checking Sleeper league 1312113855769366528 for completed trades.
+[2026-07-05 20:00:59 EDT] No new completed trades found.
+[2026-07-05 20:00:59 EDT] Sleeping for 300 second(s).
+[2026-07-05 20:05:59 EDT] Checking Sleeper league 1312113855769366528 for completed trades.
+[2026-07-05 20:05:59 EDT] No new completed trades found.
+[2026-07-05 20:05:59 EDT] Sleeping for 300 second(s).
+[2026-07-05 20:11:00 EDT] Checking Sleeper league 1312113855769366528 for completed trades.
+[2026-07-05 20:11:00 EDT] No new completed trades found.
+[2026-07-05 20:11:00 EDT] Sleeping for 300 second(s).
+[2026-07-05 20:16:00 EDT] Checking Sleeper league 1312113855769366528 for completed trades.
+[2026-07-05 20:16:01 EDT] No new completed trades found.
+[2026-07-05 20:16:01 EDT] Sleeping for 300 second(s).
+[2026-07-05 20:21:01 EDT] Checking Sleeper league 1312113855769366528 for completed trades.
+[2026-07-05 20:21:01 EDT] No new completed trades found.
+[2026-07-05 20:21:01 EDT] Sleeping for 300 second(s).
+[2026-07-05 20:26:01 EDT] Checking Sleeper league 1312113855769366528 for completed trades.
+[2026-07-05 20:26:02 EDT] No new completed trades found.
+[2026-07-05 20:26:02 EDT] Sleeping for 300 second(s).
+[2026-07-05 20:31:02 EDT] Checking Sleeper league 1312113855769366528 for completed trades.
+[2026-07-05 20:31:02 EDT] No new completed trades found.
+[2026-07-05 20:31:02 EDT] Sleeping for 300 second(s).
+[2026-07-05 20:36:02 EDT] Checking Sleeper league 1312113855769366528 for completed trades.
+[2026-07-05 20:36:03 EDT] No new completed trades found.
+[2026-07-05 20:36:03 EDT] Sleeping for 300 second(s).
+[2026-07-05 20:41:03 EDT] Checking Sleeper league 1312113855769366528 for completed trades.
+[2026-07-05 20:41:03 EDT] No new completed trades found.
+[2026-07-05 20:41:03 EDT] Sleeping for 300 second(s).
+[2026-07-05 20:46:03 EDT] Checking Sleeper league 1312113855769366528 for completed trades.
+[2026-07-05 20:46:03 EDT] No new completed trades found.
+[2026-07-05 20:46:03 EDT] Sleeping for 300 second(s).
+[2026-07-05 20:51:04 EDT] Checking Sleeper league 1312113855769366528 for completed trades.
+[2026-07-05 20:51:04 EDT] No new completed trades found.
+[2026-07-05 20:51:04 EDT] Sleeping for 300 second(s).
+[2026-07-05 20:56:04 EDT] Checking Sleeper league 1312113855769366528 for completed trades.
+[2026-07-05 20:56:04 EDT] No new completed trades found.
+[2026-07-05 20:56:04 EDT] Sleeping for 300 second(s).
+[2026-07-05 21:01:05 EDT] Checking Sleeper league 1312113855769366528 for completed trades.
+[2026-07-05 21:01:05 EDT] No new completed trades found.
+[2026-07-05 21:01:05 EDT] Sleeping for 300 second(s).
+[2026-07-05 21:06:05 EDT] Checking Sleeper league 1312113855769366528 for completed trades.
+[2026-07-05 21:06:05 EDT] No new completed trades found.
+[2026-07-05 21:06:05 EDT] Sleeping for 300 second(s).
+[2026-07-05 21:11:06 EDT] Checking Sleeper league 1312113855769366528 for completed trades.
+[2026-07-05 21:11:06 EDT] No new completed trades found.
+[2026-07-05 21:11:06 EDT] Sleeping for 300 second(s).
+[2026-07-05 21:16:06 EDT] Checking Sleeper league 1312113855769366528 for completed trades.
+[2026-07-05 21:16:07 EDT] No new completed trades found.
+[2026-07-05 21:16:07 EDT] Sleeping for 300 second(s).
+[2026-07-05 21:21:07 EDT] Checking Sleeper league 1312113855769366528 for completed trades.
+[2026-07-05 21:21:07 EDT] No new completed trades found.
+[2026-07-05 21:21:07 EDT] Sleeping for 300 second(s).
+[2026-07-05 21:26:07 EDT] Checking Sleeper league 1312113855769366528 for completed trades.
+[2026-07-05 21:26:08 EDT] No new completed trades found.
+[2026-07-05 21:26:08 EDT] Sleeping for 300 second(s).
+[2026-07-05 21:31:08 EDT] Checking Sleeper league 1312113855769366528 for completed trades.
+[2026-07-05 21:31:08 EDT] No new completed trades found.
+[2026-07-05 21:31:08 EDT] Sleeping for 300 second(s).
+[2026-07-05 21:36:08 EDT] Checking Sleeper league 1312113855769366528 for completed trades.
+[2026-07-05 21:36:08 EDT] No new completed trades found.
+[2026-07-05 21:36:08 EDT] Sleeping for 300 second(s).
+[2026-07-05 21:41:09 EDT] Checking Sleeper league 1312113855769366528 for completed trades.
+[2026-07-05 21:41:09 EDT] No new completed trades found.
+[2026-07-05 21:41:09 EDT] Sleeping for 300 second(s).
+[2026-07-05 21:46:09 EDT] Checking Sleeper league 1312113855769366528 for completed trades.
+[2026-07-05 21:46:09 EDT] No new completed trades found.
+[2026-07-05 21:46:09 EDT] Sleeping for 300 second(s).
+[2026-07-05 21:51:09 EDT] Checking Sleeper league 1312113855769366528 for completed trades.
+[2026-07-05 21:51:10 EDT] No new completed trades found.
+[2026-07-05 21:51:10 EDT] Sleeping for 300 second(s).
+[2026-07-05 21:56:10 EDT] Checking Sleeper league 1312113855769366528 for completed trades.
+[2026-07-05 21:56:10 EDT] No new completed trades found.
+[2026-07-05 21:56:10 EDT] Sleeping for 300 second(s).
+[2026-07-05 22:01:10 EDT] Checking Sleeper league 1312113855769366528 for completed trades.
+[2026-07-05 22:01:11 EDT] No new completed trades found.
+[2026-07-05 22:01:11 EDT] Sleeping for 300 second(s).
+[2026-07-05 22:06:11 EDT] Checking Sleeper league 1312113855769366528 for completed trades.
+[2026-07-05 22:06:12 EDT] No new completed trades found.
+[2026-07-05 22:06:12 EDT] Sleeping for 300 second(s).
+[2026-07-05 22:11:12 EDT] Checking Sleeper league 1312113855769366528 for completed trades.
+[2026-07-05 22:11:12 EDT] No new completed trades found.
+[2026-07-05 22:11:12 EDT] Sleeping for 300 second(s).
+[2026-07-05 22:16:12 EDT] Checking Sleeper league 1312113855769366528 for completed trades.
+[2026-07-05 22:16:13 EDT] No new completed trades found.
+[2026-07-05 22:16:13 EDT] Sleeping for 300 second(s).
+[2026-07-05 22:21:16 EDT] Sleeping for 300 second(s).
+[2026-07-05 22:26:16 EDT] Checking Sleeper league 1312113855769366528 for completed trades.
+[2026-07-05 22:26:17 EDT] No new completed trades found.
+[2026-07-05 22:26:17 EDT] Sleeping for 300 second(s).
+[2026-07-05 22:31:17 EDT] Checking Sleeper league 1312113855769366528 for completed trades.
+[2026-07-05 22:31:17 EDT] No new completed trades found.
+[2026-07-05 22:31:17 EDT] Sleeping for 300 second(s).
+[2026-07-05 22:41:33 EDT] Sleeping for 300 second(s).
+[2026-07-05 22:55:24 EDT] Checking Sleeper league 1312113855769366528 for completed trades.
+[2026-07-05 22:55:25 EDT] No new completed trades found.
+[2026-07-05 22:55:25 EDT] Sleeping for 300 second(s).
