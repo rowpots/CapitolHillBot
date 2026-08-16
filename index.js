@@ -184,7 +184,9 @@ const config = {
   headless: parseBoolean(process.env.HEADLESS, false),
   dryRun: parseBoolean(process.env.DRY_RUN, false),
   runOnce: parseBoolean(process.env.RUN_ONCE, false),
-  roastMode: parseBoolean(process.env.ROAST_MODE, true),
+  // Roasts are off. The generated lines were mean-spirited for what is usually
+  // an ordinary trade; flip ROAST_MODE=true to bring them back.
+  roastMode: parseBoolean(process.env.ROAST_MODE, false),
   weeklyReportsEnabled: parseBoolean(
     process.env.WEEKLY_REPORTS_ENABLED,
     true
@@ -2810,10 +2812,28 @@ function buildTradeAnalysis(
       countUnknownValueAssets(sentAssets) + countUnknownValueAssets(receivedAssets);
     const knownValueCount =
       countKnownValueAssets(sentAssets) + countKnownValueAssets(receivedAssets);
-    const netValue = receivedValue - sentValue;
+    // Piece counts drive the consolidation premium, so only assets we can
+    // actually value should count — an ungraded throw-in must not inflate the
+    // gap and buy a bonus.
+    const sentCount = countKnownValueAssets(sentAssets);
+    const receivedCount = countKnownValueAssets(receivedAssets);
+    const receivedConsolidationBonus = computeConsolidationBonus({
+      ownCount: receivedCount,
+      otherCount: sentCount,
+      bundleValue: receivedValue,
+    });
+    const sentConsolidationBonus = computeConsolidationBonus({
+      ownCount: sentCount,
+      otherCount: receivedCount,
+      bundleValue: sentValue,
+    });
+    const adjustedReceivedValue = receivedValue + receivedConsolidationBonus;
+    const adjustedSentValue = sentValue + sentConsolidationBonus;
+    const rawNetValue = receivedValue - sentValue;
+    const netValue = adjustedReceivedValue - adjustedSentValue;
     const gradeData = buildTradeGrade({
-      sentValue,
-      receivedValue,
+      sentValue: adjustedSentValue,
+      receivedValue: adjustedReceivedValue,
       knownValueCount,
     });
 
@@ -2824,6 +2844,9 @@ function buildTradeAnalysis(
       receivedAssets,
       sentValue,
       receivedValue,
+      receivedConsolidationBonus,
+      sentConsolidationBonus,
+      rawNetValue,
       netValue,
       unknownAssetCount,
       knownValueCount,
@@ -2993,6 +3016,46 @@ function buildFaabAsset(transfer) {
   };
 }
 
+// Summing raw values treats a trade as a pile of assets, but dynasty rosters
+// have finite starting slots — consolidating three good pieces into one great
+// one is worth more than the sums say. KeepTradeCut's own calculator models
+// this with an explicit "value adjustment" on whichever side receives fewer
+// pieces (~27% of that side's bundle per surplus piece, back-solved from its
+// posted numbers). Grading raw sums without it handed an F to trades KTC
+// itself calls fair.
+const CONSOLIDATION_PREMIUM_RATE = 0.27;
+// A 5-for-1 shouldn't earn a 135% bonus, so cap the multiplier.
+const CONSOLIDATION_PREMIUM_MAX = 0.6;
+
+// The premium belongs to the *bundle*, not to one team's point of view: the
+// two-piece side of this trade is worth more than its sum no matter which team
+// is being graded. Applying it only to what a team received would grade the
+// same trade C for one side and A for the other.
+function computeConsolidationBonus({ ownCount, otherCount, bundleValue }) {
+  const pieceGap = (otherCount ?? 0) - (ownCount ?? 0);
+  if (pieceGap <= 0 || !(bundleValue > 0)) {
+    return 0;
+  }
+
+  const rate = Math.min(
+    CONSOLIDATION_PREMIUM_RATE * pieceGap,
+    CONSOLIDATION_PREMIUM_MAX
+  );
+  return Math.round(bundleValue * rate);
+}
+
+// Six evenly-spaced tiers. The old nine-tier ladder was lopsided — -0.25 earned
+// an F while +0.25 earned only an A- — so an ordinary losing side graded like a
+// disaster. C straddles zero and is the "fair trade" band.
+const GRADE_TIERS = [
+  { min: 0.3, grade: "A", gradeFlavor: "elite" },
+  { min: 0.12, grade: "B", gradeFlavor: "good" },
+  { min: -0.12, grade: "C", gradeFlavor: "neutral" },
+  { min: -0.3, grade: "D", gradeFlavor: "bad" },
+  { min: -0.5, grade: "E", gradeFlavor: "bad" },
+];
+
+// Takes consolidation-adjusted values; the caller owns that adjustment.
 function buildTradeGrade({ sentValue, receivedValue, knownValueCount }) {
   if (!knownValueCount) {
     return {
@@ -3004,33 +3067,13 @@ function buildTradeGrade({ sentValue, receivedValue, knownValueCount }) {
 
   const baseline = Math.max((sentValue + receivedValue) / 2, 1);
   const score = (receivedValue - sentValue) / baseline;
+  const tier = GRADE_TIERS.find((candidate) => score >= candidate.min);
 
-  if (score >= 0.7) {
-    return { grade: "A+", gradeFlavor: "elite", score };
-  }
-  if (score >= 0.45) {
-    return { grade: "A", gradeFlavor: "elite", score };
-  }
-  if (score >= 0.25) {
-    return { grade: "A-", gradeFlavor: "elite", score };
-  }
-  if (score >= 0.12) {
-    return { grade: "B+", gradeFlavor: "good", score };
-  }
-  if (score >= 0.05) {
-    return { grade: "B", gradeFlavor: "good", score };
-  }
-  if (score >= -0.05) {
-    return { grade: "C", gradeFlavor: "neutral", score };
-  }
-  if (score >= -0.12) {
-    return { grade: "C-", gradeFlavor: "neutral", score };
-  }
-  if (score >= -0.25) {
-    return { grade: "D", gradeFlavor: "bad", score };
+  if (!tier) {
+    return { grade: "F", gradeFlavor: "bad", score };
   }
 
-  return { grade: "F", gradeFlavor: "bad", score };
+  return { grade: tier.grade, gradeFlavor: tier.gradeFlavor, score };
 }
 
 function buildVerdict(teams, valueBook) {
@@ -3108,11 +3151,17 @@ function buildTeamSubtitle(team) {
   }
 
   const netLabel = team.unknownAssetCount ? "Known net" : "Net";
+  // Surface the consolidation premium rather than folding it silently into the
+  // net, so a fair-looking grade on a lopsided-looking pile is explainable.
+  const consolidationSuffix = (bonus) =>
+    bonus ? ` (${formatSignedValue(bonus)} consolidation)` : "";
   const pieces = [
-    `${team.unknownAssetCount ? "Known sent" : "Sent"} ${formatValue(team.sentValue)}`,
+    `${team.unknownAssetCount ? "Known sent" : "Sent"} ${formatValue(
+      team.sentValue
+    )}${consolidationSuffix(team.sentConsolidationBonus)}`,
     `${team.unknownAssetCount ? "Known received" : "Received"} ${formatValue(
       team.receivedValue
-    )}`,
+    )}${consolidationSuffix(team.receivedConsolidationBonus)}`,
     `${netLabel} ${formatSignedValue(team.netValue)}`,
   ];
 
