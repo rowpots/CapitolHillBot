@@ -798,8 +798,32 @@ export default class SnapBot {
     await this.page.keyboard.press("Enter");
   }
 
+  // waitForChatList() only proves the list *container* rendered. While the
+  // conversations are still loading that container holds a spinner and zero
+  // rows, so a lookup starting there finds nothing — and with nothing to
+  // scroll yet, findTitleSpanOnCurrentView gives up on its first pass. The
+  // list reliably fills in a few seconds; block for real rows before hunting.
+  async waitForChatRows(timeout = 45000) {
+    const deadline = Date.now() + timeout;
+
+    while (Date.now() < deadline) {
+      const rowCount = await this.page
+        .evaluate(() => document.querySelectorAll("span[id^='title-']").length)
+        .catch(() => 0);
+
+      if (rowCount > 0) {
+        return true;
+      }
+
+      await delay(500);
+    }
+
+    return false;
+  }
+
   async findRecipientTitleSpan(chatId, maxScrollAttempts = 30) {
     await this.waitForChatList();
+    await this.waitForChatRows();
     return this.findTitleSpanOnCurrentView(chatId, maxScrollAttempts);
   }
 
@@ -807,6 +831,8 @@ export default class SnapBot {
     const normalizedChatId = this.normalizeChatId(chatId);
     const targetId = `title-${normalizedChatId}`;
     await this.resetScrollableContainersToTop();
+
+    let exhaustedScrolls = 0;
 
     for (let attempt = 0; attempt <= maxScrollAttempts; attempt += 1) {
       const titleSpan = await this.page.$(`span[id="${targetId}"]`);
@@ -816,7 +842,17 @@ export default class SnapBot {
 
       const didScroll = await this.scrollScrollableContainers();
       if (!didScroll) {
-        break;
+        // Either the true bottom of the list, or rows that are still
+        // rendering. Give the list a beat and rescan from the top before
+        // concluding the chat genuinely isn't there.
+        exhaustedScrolls += 1;
+        if (exhaustedScrolls > 2) {
+          break;
+        }
+
+        await delay(1500);
+        await this.resetScrollableContainersToTop();
+        continue;
       }
 
       await delay(300);

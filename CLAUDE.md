@@ -54,9 +54,14 @@ engineering map — keep it lean.
 - **At most one message per poll cycle.** Queued-trade release, `flushMilestones`, and live-scoring
   all send one even when several are due — back-to-back sends get dropped mid-burst by Snapchat and
   look like spam. Backlog trickles out one per cycle.
-- Right after a fast cookie-restored login the chat row may not be rendered → send fails with
-  "Could not find chat …". Previews retry (`sendMessageWithRetry`, default 4 attempts); the live bot
-  self-heals via `ensureSnapchatSessionReady` / `restartSnapchatSession`.
+- **The chat list loads ~5s after `waitForChatList()` returns.** `chatListReady` is satisfied by the
+  ReactVirtualized *container*, which holds a spinner and zero rows while conversations load — a
+  false positive. A lookup starting there sees no rows, has nothing to scroll, and
+  `findTitleSpanOnCurrentView` bails on its first pass → "Could not find chat …" for **every** chat,
+  including ones that plainly exist. `findRecipientTitleSpan` now awaits `waitForChatRows()` first;
+  don't remove it. This was the long-tail cause of the "row not rendered after a fast
+  cookie-restored login" flake, and on 2026-08-25 it went permanent and blocked all sends.
+  Previews also retry (`sendMessageWithRetry`, default 4 attempts).
 - Multi-line messages type Shift+Enter per `\n`, so leading blank lines render as real spacing
   (used intentionally as a buffer on some posts).
 - Reads (`readChatMessages`): scrape `#cv-<chatId>`, one `li.T1yt2` per sender block; sender name
@@ -181,8 +186,22 @@ State per `(season, week)`: `sentSnapshots` + `firedSignatures` 200-ring, reset 
 - **Login-required guard**: a chat-list timeout with the login screen visible throws with
   `code: "SNAP_LOGIN_REQUIRED"` (`snapbot.js`); `establishSnapchatSessionWithGuard` (`index.js`)
   then alerts Discord and parks (retry hourly) instead of exiting — never let a cookie-death path
-  crash-loop against Snapchat's login screen. All other session errors still exit fatally
-  (systemd restarts).
+  crash-loop against Snapchat's login screen. **Any** failure inside `bot.login()` is tagged with
+  the same code for the same reason (a password-field timeout used to exit fatally → systemd
+  restart → another login attempt, which is exactly the hammering the guard exists to prevent).
+  Other session errors still exit fatally (systemd restarts).
+- **Session health**: a wedged renderer stays `connected` with a non-closed page, so those two
+  checks can't detect it. `ensureSnapchatSessionReady` runs a real `page.evaluate` liveness probe
+  under a 15s cap (vs. the 300s `protocolTimeout`, which would burn a whole cycle discovering the
+  hang), and `isRecoverableSnapError` treats protocol timeouts as restart-worthy — without that,
+  the bot retries a dead page forever (it did, for nine days). The session is also recycled every
+  `SNAPCHAT_SESSION_MAX_AGE_MS` (default 12h) because Snapchat Web leaks (~1GB renderer RSS after
+  nine days) and a leaked renderer is what wedges. The healthcheck.io ping only fires on cycles
+  where the browser actually answered — a Sleeper-only cycle is not a healthy bot.
+- `.state/` must be **writable by `bot` (0700)**, not just readable. It was found at `0500` on the
+  VPS: existing files still updated (that needs write on the *file*), but no **new** state file
+  could be created — which silently breaks every feature whose state file doesn't exist yet
+  (weekly report, power rankings, milestones, playoffs, HoF, live scoring …).
 - On Linux the Snapchat launch adds `--no-sandbox` etc. via a `process.platform` spread in
   `establishSnapchatSession` — required on Ubuntu 24.04; don't remove.
 - Secrets (`.env`, `*-cookies.json`) and `.state/` are gitignored — never commit them.

@@ -351,10 +351,28 @@ async function main() {
       // Dead-man's-switch: only successful cycles ping, so healthchecks.io
       // catches both process death and a perma-failing loop. The 24h cooldown
       // on the heartbeat alert makes it a once-a-day Discord "still alive".
-      pingHealthcheck();
-      await sendAlert("heartbeat", "SnapBot heartbeat: alive.", {
-        cooldownMs: 24 * 60 * 60 * 1000,
-      });
+      //
+      // The browser has to answer for a cycle to count as healthy. A cycle
+      // where only the Sleeper fetch succeeded is not a working bot, and
+      // pinging on those turned the switch into a rubber stamp that stayed
+      // green right through a nine-day blackout.
+      if (config.dryRun || (await isSnapchatPageResponsive())) {
+        pingHealthcheck();
+        await sendAlert("heartbeat", "SnapBot heartbeat: alive.", {
+          cooldownMs: 24 * 60 * 60 * 1000,
+        });
+      } else {
+        console.warn(
+          "Skipping healthcheck ping — the Snapchat page did not respond this cycle."
+        );
+        await sendAlert(
+          "browser-unresponsive",
+          "SnapBot: the Snapchat page is not responding, so nothing can be " +
+            "sent or read. The session should self-restart; if this repeats, " +
+            "check `journalctl -u snapbot`.",
+          { cooldownMs: 60 * 60 * 1000 }
+        );
+      }
     } catch (error) {
       console.error("Polling cycle failed, but the bot will keep running.");
       console.error(error);
@@ -468,7 +486,20 @@ async function establishSnapchatSession() {
     }
 
     console.log("Logging into Snapchat.");
-    await bot.login(credentials);
+    try {
+      await bot.login(credentials);
+    } catch (error) {
+      // A timeout partway through the login form (password field never
+      // appeared, an unexpected verification interstitial, a changed selector)
+      // is not a bug worth crashing on — it means login cannot be completed
+      // unattended. Route it into the same park-and-alert path as dead cookies
+      // rather than exiting into a systemd restart loop that would hammer
+      // Snapchat's login screen and risk a security flag on the account.
+      if (!error.code) {
+        error.code = "SNAP_LOGIN_REQUIRED";
+      }
+      throw error;
+    }
   } else if (initialState === "chat_list") {
     console.log("Snapchat session restored from an existing login.");
   } else {
@@ -495,6 +526,7 @@ async function establishSnapchatSession() {
   await bot.waitForChatList(config.snapchatLoginTimeoutMs);
   await bot.blockTypingNotifications(true);
   await bot.saveCookies(credentials.username);
+  sessionEstablishedAtMs = Date.now();
 }
 
 async function restartSnapchatSession() {
@@ -515,6 +547,43 @@ async function restartSnapchatSession() {
   await establishSnapchatSessionWithGuard();
 }
 
+// A wedged renderer stays "connected" with an open page, so the only honest
+// liveness test is making it actually execute something — under a timeout far
+// shorter than the 300s CDP protocolTimeout, which would otherwise burn a full
+// poll cycle just discovering the hang.
+const SESSION_PROBE_TIMEOUT_MS = 15000;
+
+// Snapchat Web leaks steadily when left open (~1GB renderer RSS after nine
+// days), and a leaked renderer is what eventually wedges. Recycling on a timer
+// is far cheaper than recovering from the hang.
+const SESSION_MAX_AGE_MS = parseInteger(
+  process.env.SNAPCHAT_SESSION_MAX_AGE_MS,
+  12 * 60 * 60 * 1000
+);
+
+let sessionEstablishedAtMs = 0;
+
+async function probeSnapchatPageAlive() {
+  return await Promise.race([
+    bot.page.evaluate(() => true),
+    new Promise((_, reject) =>
+      setTimeout(
+        () => reject(new Error("Snapchat page liveness probe timed out.")),
+        SESSION_PROBE_TIMEOUT_MS
+      )
+    ),
+  ]);
+}
+
+async function isSnapchatPageResponsive() {
+  try {
+    await probeSnapchatPageAlive();
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 async function ensureSnapchatSessionReady() {
   if (config.dryRun) {
     return;
@@ -531,13 +600,29 @@ async function ensureSnapchatSessionReady() {
     return;
   }
 
+  if (
+    sessionEstablishedAtMs > 0 &&
+    Date.now() - sessionEstablishedAtMs > SESSION_MAX_AGE_MS
+  ) {
+    console.log(
+      `Snapchat session is older than ${Math.round(
+        SESSION_MAX_AGE_MS / 3600000
+      )}h; recycling the browser before it wedges.`
+    );
+    await restartSnapchatSession();
+    return;
+  }
+
   try {
+    await probeSnapchatPageAlive();
     await bot.handlePopup(1500);
   } catch (error) {
     if (!isRecoverableSnapError(error)) {
       throw error;
     }
 
+    console.warn("Snapchat page is not responding; restarting the session.");
+    console.warn(error.message);
     await restartSnapchatSession();
   }
 }
@@ -2655,15 +2740,39 @@ async function processQueuedManualTestTrade(state) {
   }
 }
 
+// Every scheduled feature catches its own send failure and retries next cycle,
+// which is right for a transient blip but silent when it isn't — the nine-day
+// outage produced hundreds of caught failures and not one alert. Count
+// consecutive failures across all senders and escalate once it stops looking
+// transient.
+const SEND_FAILURE_ALERT_THRESHOLD = 3;
+let consecutiveSendFailures = 0;
+
 async function sendChatMessage(message, label, { chatId } = {}) {
   const targetChatId = chatId || resolveNotificationChatId("live");
-  await ensureSnapchatSessionReady();
-  await bot.openMessagingHome();
-  await bot.sendMessage({
-    chat: targetChatId,
-    message,
-    exit: false,
-  });
+
+  try {
+    await ensureSnapchatSessionReady();
+    await bot.openMessagingHome();
+    await bot.sendMessage({
+      chat: targetChatId,
+      message,
+      exit: false,
+    });
+  } catch (error) {
+    consecutiveSendFailures += 1;
+    if (consecutiveSendFailures >= SEND_FAILURE_ALERT_THRESHOLD) {
+      await sendAlert(
+        "send-failures",
+        `SnapBot: ${consecutiveSendFailures} consecutive Snapchat sends have ` +
+          `failed. Latest (${label}): ${error.message}`,
+        { cooldownMs: 60 * 60 * 1000 }
+      );
+    }
+    throw error;
+  }
+
+  consecutiveSendFailures = 0;
   console.log(`Sent ${label} to ${describeNotificationChat(targetChatId)}.`);
 }
 
@@ -4368,14 +4477,28 @@ function formatOrdinal(round) {
   }
 }
 
+// "Recoverable" means: throw the browser away and build a fresh session,
+// rather than crash. The first four are hard-dead browser states. The timeout
+// cases matter just as much and were the expensive omission: a renderer that
+// has leaked or wedged stays *connected* with its page still *open*, so the
+// cheap liveness checks pass while every CDP call times out. That combination
+// once kept the bot retrying a dead page for nine days — it never restarted
+// because a protocol timeout matched none of the strings below.
 function isRecoverableSnapError(error) {
   const message = String(error?.message ?? "");
+  const name = String(error?.name ?? "");
 
   return (
     message.includes("Target closed") ||
     message.includes("Session closed") ||
     message.includes("Execution context was destroyed") ||
-    message.includes("detached Frame")
+    message.includes("detached Frame") ||
+    message.includes("Navigating frame was detached") ||
+    // Puppeteer's protocolTimeout error, for any CDP method, always carries
+    // this hint text — the signature of a hung renderer.
+    message.includes("protocolTimeout") ||
+    message.includes("liveness probe timed out") ||
+    name === "ProtocolError"
   );
 }
 
