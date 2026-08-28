@@ -6,6 +6,7 @@ import {
   clamp,
   formatOrdinal,
   normalizePickLabel,
+  normalizePlayerName,
   normalizeText,
   readAnyCache,
   readFreshCache,
@@ -65,7 +66,7 @@ function buildValueBook(players, valueMode, sourceDate) {
       continue;
     }
 
-    const normalizedName = normalizeText(row.playerName);
+    const normalizedName = normalizePlayerName(row.playerName);
     const normalizedPosition = normalizeText(row.position);
     const normalizedTeam = normalizeText(row.team);
 

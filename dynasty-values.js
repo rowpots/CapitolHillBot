@@ -6,6 +6,7 @@ import {
   clamp,
   formatOrdinal,
   normalizePickLabel,
+  normalizePlayerName,
   normalizeText,
   readAnyCache,
   readFreshCache,
@@ -98,7 +99,7 @@ export async function loadDynastyValueBook({
       continue;
     }
 
-    const normalizedName = normalizeText(row.player);
+    const normalizedName = normalizePlayerName(row.player);
     const normalizedPosition = normalizeText(row.pos);
     const normalizedTeam = normalizeText(row.team);
 

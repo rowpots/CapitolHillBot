@@ -36,8 +36,28 @@ export function normalizeText(value) {
     .replace(/[^a-z0-9]+/g, "");
 }
 
+// Generational suffixes are carried inconsistently across sources: Sleeper has
+// "Marvin Harrison" and "Kenneth Walker" where KeepTradeCut lists "Marvin
+// Harrison Jr." and "Kenneth Walker III". normalizeText collapses punctuation
+// and spaces first, so by the time it runs there is no token boundary left to
+// recognise — "marvinharrison" never matched "marvinharrisonjr", and those
+// players silently graded as worthless. Strip one trailing suffix *before*
+// collapsing, and only for names; positions and teams keep plain normalizeText.
+const NAME_SUFFIX_PATTERN = /\s+(?:jr|sr|ii|iii|iv|v)\.?$/;
+
+export function normalizePlayerName(value) {
+  const withoutSuffix = String(value ?? "")
+    .normalize("NFD")
+    .replace(/\p{Diacritic}/gu, "")
+    .toLowerCase()
+    .trim()
+    .replace(NAME_SUFFIX_PATTERN, "");
+
+  return normalizeText(withoutSuffix);
+}
+
 export function buildPlayerLookupKeys(player) {
-  const normalizedName = normalizeText(
+  const normalizedName = normalizePlayerName(
     player.full_name ||
       [player.first_name, player.last_name].filter(Boolean).join(" ")
   );
