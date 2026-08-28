@@ -8,6 +8,7 @@
   "scripts": {
     "bot": "node index.js",
     "login": "node login.js",
+    "refresh-cookies": "node refresh-cookies.js",
     "test-trade": "node test-trade.js",
     "preview-weekly-report": "node preview-weekly-report.js",
     "preview-power-rankings": "node preview-power-rankings.js",

@@ -330,6 +330,10 @@ async function main() {
 
   do {
     try {
+      // Repair or recycle the session before anything depends on it, rather
+      // than leaving that to whichever send path happens to trip over it.
+      const sessionHealthy = await maintainSnapchatSession();
+
       await processQueuedManualTestTrade(state);
       await pollForTradeVetoes(state);
       await flushQueuedTradeNotifications(state);
@@ -356,7 +360,7 @@ async function main() {
       // where only the Sleeper fetch succeeded is not a working bot, and
       // pinging on those turned the switch into a rubber stamp that stayed
       // green right through a nine-day blackout.
-      if (config.dryRun || (await isSnapchatPageResponsive())) {
+      if (sessionHealthy) {
         pingHealthcheck();
         await sendAlert("heartbeat", "SnapBot heartbeat: alive.", {
           cooldownMs: 24 * 60 * 60 * 1000,
@@ -367,9 +371,8 @@ async function main() {
         );
         await sendAlert(
           "browser-unresponsive",
-          "SnapBot: the Snapchat page is not responding, so nothing can be " +
-            "sent or read. The session should self-restart; if this repeats, " +
-            "check `journalctl -u snapbot`.",
+          "SnapBot: the Snapchat page is not responding and automatic repair " +
+            "did not recover it. Check `journalctl -u snapbot`.",
           { cooldownMs: 60 * 60 * 1000 }
         );
       }
@@ -529,22 +532,72 @@ async function establishSnapchatSession() {
   sessionEstablishedAtMs = Date.now();
 }
 
-async function restartSnapchatSession() {
+// browser.close() on a wedged renderer can hang forever — there is no CDP
+// response coming, and close() waits for one. On 2026-08-28 that hung for 17.5h
+// while systemd still reported the unit active: the 12h recycle, which exists to
+// be the safety net, became the thing that died. Bound the graceful close, then
+// SIGKILL the browser Chrome, so a restart always terminates one way or another.
+const BROWSER_CLOSE_TIMEOUT_MS = 30000;
+
+async function restartSnapchatSession({ parkOnLoginRequired = true } = {}) {
   console.warn("Restarting the Snapchat browser session.");
 
+  await closePreviousBrowser();
+
+  if (parkOnLoginRequired) {
+    await establishSnapchatSessionWithGuard();
+  } else {
+    await establishSnapchatSession();
+  }
+}
+
+async function closePreviousBrowser() {
+  const previous = bot.browser;
+  // Drop the handles up front: whatever happens to the old browser below,
+  // nothing else should keep reaching for it.
+  bot.browser = null;
+  bot.page = null;
+
+  if (!previous) {
+    return;
+  }
+
+  const child = previous.process?.();
+  const gracefulClose = previous.close();
+  // The loser of the race must not resurface as an unhandled rejection — that
+  // would take the whole process down through main()'s fatal catch.
+  gracefulClose.catch(() => {});
+
+  let timer;
   try {
-    if (bot.browser) {
-      await bot.browser.close();
-    }
+    await Promise.race([
+      gracefulClose,
+      new Promise((_, reject) => {
+        timer = setTimeout(
+          () => reject(new Error("Timed out closing the Snapchat browser.")),
+          BROWSER_CLOSE_TIMEOUT_MS
+        );
+      }),
+    ]);
+    return;
   } catch (error) {
     console.warn("Unable to close the previous Snapchat browser cleanly.");
     console.warn(error.message);
   } finally {
-    bot.browser = null;
-    bot.page = null;
+    clearTimeout(timer);
   }
 
-  await establishSnapchatSessionWithGuard();
+  if (!child || child.killed) {
+    return;
+  }
+
+  try {
+    child.kill("SIGKILL");
+    console.warn(`Force-killed the Snapchat browser (pid ${child.pid}).`);
+  } catch (error) {
+    console.warn("Unable to force-kill the Snapchat browser.");
+    console.warn(error.message);
+  }
 }
 
 // A wedged renderer stays "connected" with an open page, so the only honest
@@ -584,7 +637,7 @@ async function isSnapchatPageResponsive() {
   }
 }
 
-async function ensureSnapchatSessionReady() {
+async function ensureSnapchatSessionReady(options = {}) {
   if (config.dryRun) {
     return;
   }
@@ -596,7 +649,7 @@ async function ensureSnapchatSessionReady() {
   const pageClosed = bot.page?.isClosed?.() ?? true;
 
   if (!browserConnected || pageClosed) {
-    await restartSnapchatSession();
+    await restartSnapchatSession(options);
     return;
   }
 
@@ -609,7 +662,7 @@ async function ensureSnapchatSessionReady() {
         SESSION_MAX_AGE_MS / 3600000
       )}h; recycling the browser before it wedges.`
     );
-    await restartSnapchatSession();
+    await restartSnapchatSession(options);
     return;
   }
 
@@ -623,8 +676,75 @@ async function ensureSnapchatSessionReady() {
 
     console.warn("Snapchat page is not responding; restarting the session.");
     console.warn(error.message);
-    await restartSnapchatSession();
+    await restartSnapchatSession(options);
   }
+}
+
+// The 12h recycle and the wedged-page self-heal both live in
+// ensureSnapchatSessionReady, which used to be reachable only from the send and
+// read paths. A quiet stretch therefore left the session entirely unmaintained:
+// on 2026-08-28, with no trades to post and chat commands off, the recycle did
+// not fire for 23h, the on-disk cookies (re-saved only on re-establish) aged out
+// and died, and the page then sat wedged for 18h while every cycle logged the
+// problem and did nothing about it. Running maintenance once per cycle is also
+// what rolls the login forward, since each re-establish saves fresh cookies.
+//
+// It must not block, though. establishSnapchatSessionWithGuard parks for an hour
+// per attempt once cookies are dead, and parking here — on a path every cycle
+// runs unconditionally — would stall Sleeper polling too, so trades would stop
+// being queued for later, which is the one thing that still works during a
+// Snapchat outage. So the heartbeat gives up on SNAP_LOGIN_REQUIRED instead.
+//
+// Note this does not make the loop park-proof: a send path reached later in the
+// same cycle still parks on dead cookies, because the guard is the right answer
+// once something actually needs to go out. It only guarantees that *maintenance*
+// never introduces a stall of its own.
+let loginRequiredAtMs = 0;
+
+async function maintainSnapchatSession() {
+  if (config.dryRun) {
+    return true;
+  }
+
+  // Only a human can refresh the cookies; retrying every cycle would just
+  // hammer Snapchat's login screen, which is what the guard exists to avoid.
+  if (
+    loginRequiredAtMs > 0 &&
+    Date.now() - loginRequiredAtMs < LOGIN_REQUIRED_RETRY_MS
+  ) {
+    return false;
+  }
+
+  try {
+    await ensureSnapchatSessionReady({ parkOnLoginRequired: false });
+  } catch (error) {
+    if (error?.code === "SNAP_LOGIN_REQUIRED") {
+      loginRequiredAtMs = Date.now();
+      // Don't leave a browser parked on the login screen holding memory.
+      await closePreviousBrowser();
+      console.warn(
+        "Snapchat login required; a human must refresh the cookies. " +
+          `Pausing session maintenance for ${Math.round(
+            LOGIN_REQUIRED_RETRY_MS / 60000
+          )} minute(s).`
+      );
+      await sendAlert(
+        "session-expired",
+        "SnapBot: Snapchat session expired — manual re-login needed.\n" +
+          "On the PC: `npm run login` (complete any CAPTCHA/2FA), then upload " +
+          "the cookies and restart the service (see deploy/server-setup.md).",
+        { cooldownMs: 6 * 60 * 60 * 1000 }
+      );
+      return false;
+    }
+
+    console.warn("Snapchat session maintenance failed this cycle.");
+    console.warn(describeError(error));
+    return false;
+  }
+
+  loginRequiredAtMs = 0;
+  return await isSnapchatPageResponsive();
 }
 
 async function pollForTrades(state) {
