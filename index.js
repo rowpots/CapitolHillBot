@@ -708,6 +708,33 @@ async function ensureSnapchatSessionReady(options = {}) {
 // never introduces a stall of its own.
 let loginRequiredAtMs = 0;
 
+// Cookies used to reach disk only when a session was *established*, and the
+// cookies that actually carry the login are short-lived — `_sc-sid` and
+// `blizzard_web_session_id` came back with ~25-30 minute expiries. A live
+// browser rolls them in memory and runs for hours, but the saved file goes
+// stale almost immediately, so any restart more than half an hour after the
+// last establish loaded dead cookies and hit the login screen. That is what
+// made the refresh chore feel constant: not short sessions, a stale snapshot.
+// Re-saving on every healthy cycle keeps the file at most one poll interval
+// old, which is well inside the window.
+const COOKIE_SAVE_INTERVAL_MS = 5 * 60 * 1000;
+let lastCookieSaveAtMs = 0;
+
+async function persistSessionCookies() {
+  if (Date.now() - lastCookieSaveAtMs < COOKIE_SAVE_INTERVAL_MS) {
+    return;
+  }
+
+  try {
+    await bot.saveCookies(credentials.username);
+    lastCookieSaveAtMs = Date.now();
+  } catch (error) {
+    // Never let a cookie write break a cycle — the session is still fine.
+    console.warn("Could not refresh the saved Snapchat cookies.");
+    console.warn(describeError(error));
+  }
+}
+
 async function maintainSnapchatSession() {
   if (config.dryRun) {
     return true;
@@ -751,7 +778,13 @@ async function maintainSnapchatSession() {
   }
 
   loginRequiredAtMs = 0;
-  return await isSnapchatPageResponsive();
+
+  const responsive = await isSnapchatPageResponsive();
+  if (responsive) {
+    await persistSessionCookies();
+  }
+
+  return responsive;
 }
 
 async function pollForTrades(state) {
