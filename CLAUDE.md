@@ -134,7 +134,11 @@ All gated by an `.env` toggle, dedup'd via per-`(season, week)` or `sentBySeason
   (default 5). **No instant path**: that floor *is* the veto window; a backlog trickles one per
   cycle. Heads-up +
   `!veto` listener live in `TRADE_REVIEW_CHAT_ID` (falls back to the test chat; blank both = no
-  veto, just the delay). The **heads-up is the veto epoch**: `primeTradeVetoListener` seeds the
+  veto, just the delay). **`TRADE_REVIEW_ENABLED=false` (live setting) turns the whole review step
+  off** — no heads-up, no listener — while leaving the hold, the delay, and the test chat intact;
+  blanking the chat id alone can't do that, since it falls through to the test chat. Trades are
+  approved in the Sleeper app, so the Snapchat review was redundant. The **heads-up is the veto
+  epoch**: `primeTradeVetoListener` seeds the
   signature ring before the first heads-up ever sends, so pre-existing `!veto` texts can't kill a
   new trade. Tagged vetoes (`!veto <last-4>`) match the live queue idempotently; the ring only
   gates replies + bare `!veto` — so a *repeated identical* bare `!veto` from the same sender can be

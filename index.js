@@ -173,6 +173,13 @@ const config = {
     1,
     parseInteger(process.env.TRADE_SEND_DELAY_MINUTES, 5)
   ),
+  // Master switch for the pre-post review step. Off → no heads-up message and
+  // no "!veto" listener; trades still respect the prime-time hold and the send
+  // delay. Needed as its own flag because blanking TRADE_REVIEW_CHAT_ID falls
+  // through to the test chat, and that chat is still wanted for previews and
+  // `test-trade`. Off here because trades are approved in the Sleeper app, so a
+  // second review step in Snapchat is redundant.
+  tradeReviewEnabled: parseBoolean(process.env.TRADE_REVIEW_ENABLED, true),
   // Chat that receives the pending-trade heads-up and is watched for "!veto".
   // Falls back to the test chat; blank both → trades post after the delay with
   // no veto window.
@@ -2483,7 +2490,7 @@ async function flushQueuedTradeNotifications(state) {
 // release moves to a full delay after the heads-up lands, so the commissioner
 // always gets the whole window even when earlier send attempts failed.
 async function sendPendingTradeHeadsUps(state) {
-  if (!config.tradeReviewChatId) {
+  if (!config.tradeReviewEnabled || !config.tradeReviewChatId) {
     return;
   }
 
@@ -2572,7 +2579,12 @@ async function primeTradeVetoListener(state) {
 // already vetoed its trade matches nothing next cycle); the signature ring
 // gates replies and bare "!veto", mirroring pollForChatCommands.
 async function pollForTradeVetoes(state) {
-  if (!config.tradeReviewChatId || config.dryRun || !state.vetoPrimed) {
+  if (
+    !config.tradeReviewEnabled ||
+    !config.tradeReviewChatId ||
+    config.dryRun ||
+    !state.vetoPrimed
+  ) {
     return;
   }
 
