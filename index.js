@@ -3093,6 +3093,7 @@ function buildTradeAnalysis(
       knownValueCount,
       grade: gradeData.grade,
       gradeFlavor: gradeData.gradeFlavor,
+      gradeLabel: gradeData.gradeLabel,
       gradeScore: gradeData.score,
     };
   });
@@ -3288,12 +3289,20 @@ function computeConsolidationBonus({ ownCount, otherCount, bundleValue }) {
 // Six evenly-spaced tiers. The old nine-tier ladder was lopsided — -0.25 earned
 // an F while +0.25 earned only an A- — so an ordinary losing side graded like a
 // disaster. C straddles zero and is the "fair trade" band.
+// The score is a *differential* — who won and by how much — and it is zero-sum,
+// so the two sides' scores always sum to zero. Rendering that through school
+// letters made the middle band read as an insult: a perfectly fair trade, which
+// is the ideal outcome of a negotiation, came out "C" for both sides, and the
+// best shared result the scale can express is "both average". The letters stay
+// as the stored classification (trade-history, awards, the card pill); the post
+// itself now shows these verdicts, so an even trade reads as even rather than
+// mediocre. Thresholds and math are unchanged.
 const GRADE_TIERS = [
-  { min: 0.3, grade: "A", gradeFlavor: "elite" },
-  { min: 0.12, grade: "B", gradeFlavor: "good" },
-  { min: -0.12, grade: "C", gradeFlavor: "neutral" },
-  { min: -0.3, grade: "D", gradeFlavor: "bad" },
-  { min: -0.5, grade: "E", gradeFlavor: "bad" },
+  { min: 0.3, grade: "A", gradeFlavor: "elite", gradeLabel: "Heist" },
+  { min: 0.12, grade: "B", gradeFlavor: "good", gradeLabel: "Came out ahead" },
+  { min: -0.12, grade: "C", gradeFlavor: "neutral", gradeLabel: "Even swap" },
+  { min: -0.3, grade: "D", gradeFlavor: "bad", gradeLabel: "Came out behind" },
+  { min: -0.5, grade: "E", gradeFlavor: "bad", gradeLabel: "Got fleeced" },
 ];
 
 // Takes consolidation-adjusted values; the caller owns that adjustment.
@@ -3302,6 +3311,7 @@ function buildTradeGrade({ sentValue, receivedValue, knownValueCount }) {
     return {
       grade: "N/A",
       gradeFlavor: "neutral",
+      gradeLabel: "Unrated",
       score: 0,
     };
   }
@@ -3311,10 +3321,20 @@ function buildTradeGrade({ sentValue, receivedValue, knownValueCount }) {
   const tier = GRADE_TIERS.find((candidate) => score >= candidate.min);
 
   if (!tier) {
-    return { grade: "F", gradeFlavor: "bad", score };
+    return {
+      grade: "F",
+      gradeFlavor: "bad",
+      gradeLabel: "Robbed blind",
+      score,
+    };
   }
 
-  return { grade: tier.grade, gradeFlavor: tier.gradeFlavor, score };
+  return {
+    grade: tier.grade,
+    gradeFlavor: tier.gradeFlavor,
+    gradeLabel: tier.gradeLabel,
+    score,
+  };
 }
 
 function buildVerdict(teams, valueBook) {
@@ -3437,7 +3457,7 @@ function formatTradeTextMessage({ historyContext, teams }) {
         : "No tracked assets";
 
     let section = `${team.label} has sent:\n${assetLines}`;
-    section += `\n\nGrade: ${team.grade}`;
+    section += `\n\nVerdict: ${team.gradeLabel ?? team.grade}`;
 
     sections.push(section);
   }
@@ -3509,6 +3529,7 @@ async function saveTradeHistoryLog(
       netValue: team.netValue,
       grade: team.grade,
       gradeFlavor: team.gradeFlavor,
+      gradeLabel: team.gradeLabel,
       gradeScore: team.gradeScore,
       isWinner: team.isWinner,
     }));

@@ -115,6 +115,18 @@ All gated by an `.env` toggle, dedup'd via per-`(season, week)` or `sentBySeason
   "Winner of (A vs B)" placeholders; same fn does the reveal projection and the weekly real-name
   fill-in. Pollers **baseline silently** on first sighting of a new season so a restart mid-playoffs
   doesn't post a stale reveal/preview.
+- **Trade grading**: `score = (received − sent) / mean(sent, received)` on
+  **consolidation-adjusted** values — a *differential*, so the two sides always sum to zero and can
+  never both be positive. `GRADE_TIERS` carries both a letter (`grade`, the stored classification
+  read by `trade-history.json`, awards, and the card pill) and a verdict phrase (`gradeLabel`, what
+  the post prints: Heist / Came out ahead / Even swap / Came out behind / Got fleeced / Robbed
+  blind). Letters were dropped from the post because the middle band made a *fair* trade — the ideal
+  outcome — read as a mediocre "C". Thresholds are shared; only the wording differs. Note
+  `chat-commands.js` `gradeFromScore` still has its **own 9-tier letter ladder** with different
+  thresholds for `!trade` — the two have never agreed. Player-name matching strips one trailing
+  generational suffix (`normalizePlayerName`); without it Sleeper's "Marvin Harrison" missed KTC's
+  "Marvin Harrison Jr." and graded as **zero**, which also shrank the known-piece count and bought a
+  phantom consolidation premium.
 - **Awards / HoF**: trade grades are now persisted every `pollForTrades` cycle into
   `trade-history.json` (`grades[]` + `season`) — that's what Best/Worst Trade reads. HoF is keyed by
   **franchise (`roster_id`, stable across `previous_league_id` rollover)**, rendered under the slot's
