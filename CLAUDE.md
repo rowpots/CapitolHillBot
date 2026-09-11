@@ -135,6 +135,12 @@ All gated by an `.env` toggle, dedup'd via per-`(season, week)` or `sentBySeason
   generational suffix (`normalizePlayerName`); without it Sleeper's "Marvin Harrison" missed KTC's
   "Marvin Harrison Jr." and graded as **zero**, which also shrank the known-piece count and bought a
   phantom consolidation premium.
+- **KTC scrape**: the dataset moved (2026-09) out of a `var playersArray = [...]` literal into a
+  `<script type="application/json" id="ktc-players">` element, and the old slice silently ran past
+  the new `JSON.parse(...)` statement into the next variable — grading ran on a 2-month-old cache
+  until someone read the logs. `extractPlayersArray` now reads the element (legacy literal still
+  accepted, guarded on a leading `[`). A stale cache keeps the bot *working*, so the warn line is
+  the only signal: `Falling back to stale KeepTradeCut values cache`.
 - **Awards / HoF**: trade grades are now persisted every `pollForTrades` cycle into
   `trade-history.json` (`grades[]` + `season`) — that's what Best/Worst Trade reads. HoF is keyed by
   **franchise (`roster_id`, stable across `previous_league_id` rollover)**, rendered under the slot's

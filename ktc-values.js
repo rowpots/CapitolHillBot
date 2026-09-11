@@ -15,7 +15,12 @@ import {
 
 const KTC_RANKINGS_URL = "https://keeptradecut.com/dynasty-rankings";
 const VALUES_CACHE_TTL_MS = 24 * 60 * 60 * 1000;
-const PLAYERS_ARRAY_MARKER = "var playersArray = ";
+const PLAYERS_JSON_ELEMENT_ID = "ktc-players";
+const PLAYERS_JSON_OPEN_TAG = new RegExp(
+  `<script[^>]*\\bid=["']${PLAYERS_JSON_ELEMENT_ID}["'][^>]*>`,
+  "i"
+);
+const LEGACY_PLAYERS_ARRAY_MARKER = "var playersArray = ";
 
 let inMemoryValueBook = null;
 
@@ -109,11 +114,15 @@ function buildValueBook(players, valueMode, sourceDate) {
 
       return null;
     },
-    // KTC only publishes generic Early/Mid/Late tier values per round (no
-    // exact-slot or round-average data like DynastyProcess), and only for
-    // rounds 1-4 — anything beyond that has no KTC data, so it returns null
-    // just like an unresolved DynastyProcess lookup (callers already treat
-    // null as "unknown value").
+    // KTC publishes Early/Mid/Late tier values for rounds 1-4 of the next three
+    // draft classes, plus exact-slot values ("2026 Pick 1.07") for the nearest
+    // class only. We deliberately read the tier values even when a slot value
+    // exists: Sleeper's traded picks carry a season and round but no slot (draft
+    // order isn't settled until the season ends), so the slot below is a
+    // midpoint *guess* and looking up an exact value for a guessed slot would
+    // only be precise, not accurate. Anything past round 4 has no KTC data and
+    // returns null just like an unresolved DynastyProcess lookup (callers
+    // already treat null as "unknown value").
     getPickValue({ season, round, totalRosters = 12 }) {
       const numericRound = Number(round);
       if (!Number.isFinite(numericRound) || numericRound > 4) {
@@ -186,35 +195,75 @@ async function loadPlayersEnvelope(cacheFilePath, logger) {
   }
 }
 
-// The rankings page is server-rendered and embeds the full dataset as a
-// plain `var playersArray = [...]` JS statement — no API, no headless
-// browser needed. This is a brittle string-slice against an undocumented
-// page structure (not a stable public contract like DynastyProcess's CSV),
-// so a parse failure is surfaced with a distinct message from a network
-// error to make future debugging obvious.
+// The rankings page is server-rendered and ships the whole dataset inline — no
+// API, no headless browser needed. Since 2026-09 it lives in a
+// `<script type="application/json" id="ktc-players">` element that the page's
+// own JS reads back with `JSON.parse(document.getElementById(...).textContent)`;
+// before that the `var playersArray = ` statement was the array literal itself,
+// which `findLegacyPlayersArray` still accepts. Either way this is a brittle
+// read of an undocumented page structure (not a stable public contract like
+// DynastyProcess's CSV), so every failure mode gets its own message — and says
+// which source it came from — to make future debugging obvious.
 function extractPlayersArray(html) {
-  const startIndex = html.indexOf(PLAYERS_ARRAY_MARKER);
-  if (startIndex === -1) {
+  const source = findPlayersJsonElement(html) ?? findLegacyPlayersArray(html);
+  if (!source) {
     throw new Error(
-      "KTC playersArray marker not found — page structure may have changed."
+      `KTC player data not found (no #${PLAYERS_JSON_ELEMENT_ID} element, no inline playersArray literal) — page structure may have changed.`
     );
   }
-
-  const arrayStart = startIndex + PLAYERS_ARRAY_MARKER.length;
-  const arrayEnd = html.indexOf("];", arrayStart);
-  if (arrayEnd === -1) {
-    throw new Error(
-      "KTC playersArray closing bracket not found — page structure may have changed."
-    );
-  }
-
-  const jsonText = html.slice(arrayStart, arrayEnd + 1);
 
   try {
-    return JSON.parse(jsonText);
+    return JSON.parse(source.text);
   } catch (parseError) {
     throw new Error(
-      "KTC playersArray JSON could not be parsed — page structure may have changed."
+      `KTC player JSON from ${source.where} could not be parsed — page structure may have changed.`
     );
   }
+}
+
+// Script content is raw text in HTML (no entity decoding) and cannot contain an
+// unescaped "</script>", so slicing to the first one yields the exact JSON.
+function findPlayersJsonElement(html) {
+  const openTag = PLAYERS_JSON_OPEN_TAG.exec(html);
+  if (!openTag) {
+    return null;
+  }
+
+  const contentStart = openTag.index + openTag[0].length;
+  const contentEnd = html.indexOf("</script>", contentStart);
+  if (contentEnd === -1) {
+    return null;
+  }
+
+  return {
+    where: `the #${PLAYERS_JSON_ELEMENT_ID} element`,
+    text: html.slice(contentStart, contentEnd),
+  };
+}
+
+// The pre-2026-09 layout. The leading-"[" guard is the whole point: once the
+// statement became `var playersArray = JSON.parse(...)`, the old unguarded
+// slice ran straight past it to the `];` of the *next* variable and handed
+// JSON.parse a meaningless fragment — a confusing "could not be parsed" for
+// what was really "the data moved".
+function findLegacyPlayersArray(html) {
+  const markerIndex = html.indexOf(LEGACY_PLAYERS_ARRAY_MARKER);
+  if (markerIndex === -1) {
+    return null;
+  }
+
+  const arrayStart = markerIndex + LEGACY_PLAYERS_ARRAY_MARKER.length;
+  if (html[arrayStart] !== "[") {
+    return null;
+  }
+
+  const arrayEnd = html.indexOf("];", arrayStart);
+  if (arrayEnd === -1) {
+    return null;
+  }
+
+  return {
+    where: "the inline playersArray literal",
+    text: html.slice(arrayStart, arrayEnd + 1),
+  };
 }
