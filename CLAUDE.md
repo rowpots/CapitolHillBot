@@ -96,6 +96,14 @@ All gated by an `.env` toggle, dedup'd via per-`(season, week)` or `sentBySeason
 - **Power rankings**: Week 1 skipped (no games); each post titled for the *upcoming* week
   (`latestCompletedWeek + 1`). Composite score weights are tunable consts (`POWER_RANKING_WEIGHTS`,
   top of `weekly-report.js`): 40% PPG / 25% all-play / 20% win% / 15% last-3 form.
+- **Completed-week detection**: `findLatestCompletedWeek` really means "some roster has points", so a
+  week whose first game kicks off before a poller gate (the 2026 Wednesday opener, the Thanksgiving
+  1 PM slate) reads as *complete* on Thursday evening — which is how a "Week 2" power rankings went
+  out on Week 1 TNF. Every poller now goes through `resolveLatestCompletedWeek` (`index.js`), which
+  clamps to the ESPN completed-week ceiling (`resolveCompletedWeekCeiling`, `nfl-schedule.js`; ESPN
+  down → old heuristic, logged once). Playoff round *advances* use `isPlayoffWeekComplete`; the
+  playoff *baseline* `isWeekScored` checks intentionally stay "any points" (a round that has merely
+  begun already makes the previous preview stale).
 - **Big matchups**: needs a minute-granular gate (`isWeekdayAtOrAfterTimeInEastern`) for the ~30-min
   pre-TNF target. Each matchup gets **at most one** bucket (Elim → Clinch → Showdown → Draft Bowl);
   returns `null` (skip) if nothing qualifies. Thresholds at top of file were tuned against a real

@@ -55,6 +55,7 @@ import {
   isBracketTrustworthy,
   isWeekScored,
 } from "./playoffs.js";
+import { fetchSchedule, resolveCompletedWeekCeiling } from "./nfl-schedule.js";
 import {
   buildHelpMessage,
   buildMatchupPairings,
@@ -129,6 +130,9 @@ const RECORD_BOOK_FILE = path.join(STATE_DIR, "record-book.json");
 const MANUAL_TEST_TRIGGER_FILE = path.join(STATE_DIR, "manual-test-trade.json");
 const PLAYERS_CACHE_FILE = path.join(STATE_DIR, "players-nfl.json");
 const PLAYERS_CACHE_TTL_MS = 24 * 60 * 60 * 1000;
+// One ESPN scoreboard read serves every poller in a cycle (see
+// resolveLatestCompletedWeek); refetch after this long.
+const COMPLETED_WEEK_CEILING_TTL_MS = 60 * 1000;
 const REQUEST_TIMEOUT_MS = 20000;
 const VERDICT_EPSILON = 100;
 const MANUAL_TRIGGER_CHECK_INTERVAL_MS = 5000;
@@ -884,6 +888,84 @@ async function pollForTrades(state) {
   }
 }
 
+let currentNflScheduleCache = { fetchedAt: 0, schedule: null };
+let currentNflScheduleWarned = false;
+let lastLoggedCompletedWeekClamp = "";
+
+async function loadCurrentNflSchedule() {
+  const now = Date.now();
+  if (
+    currentNflScheduleCache.schedule &&
+    now - currentNflScheduleCache.fetchedAt < COMPLETED_WEEK_CEILING_TTL_MS
+  ) {
+    return currentNflScheduleCache.schedule;
+  }
+
+  try {
+    const schedule = await fetchSchedule({ fetchJson });
+    currentNflScheduleCache = { fetchedAt: now, schedule };
+    currentNflScheduleWarned = false;
+    return schedule;
+  } catch (error) {
+    if (!currentNflScheduleWarned) {
+      currentNflScheduleWarned = true;
+      console.warn(
+        `ESPN scoreboard unavailable; completed-week detection falls back to matchup points alone. ${describeError(error)}`
+      );
+    }
+    return null;
+  }
+}
+
+// Last regular-season week ESPN says has finished, or null for "no opinion".
+// A league from a past season (the !power fallback) is fully played; one from
+// a season that hasn't started has nothing complete.
+async function loadCompletedWeekCeiling(season) {
+  const schedule = await loadCurrentNflSchedule();
+  if (!schedule) {
+    return null;
+  }
+
+  const leagueSeason = Number(season);
+  const nflSeason = Number(schedule.season);
+  if (Number.isFinite(leagueSeason) && Number.isFinite(nflSeason) && leagueSeason !== nflSeason) {
+    return leagueSeason < nflSeason ? null : 0;
+  }
+  return resolveCompletedWeekCeiling(schedule);
+}
+
+// findLatestCompletedWeek reads "some roster has points" as "week done", which
+// is wrong whenever a week's first game kicks off before a poller's gate — the
+// 2026 Wednesday opener had Week 1 looking complete by Thursday 7 PM, so the
+// power rankings posted "Week 2" off a single game. Clamp it to the last week
+// ESPN has actually finished. Without ESPN it degrades to the old heuristic.
+async function resolveLatestCompletedWeek(matchupsByWeek, season) {
+  const latestScoredWeek = findLatestCompletedWeek(matchupsByWeek, REGULAR_SEASON_END_WEEK);
+  const ceiling = await loadCompletedWeekCeiling(season);
+  if (ceiling == null || ceiling >= latestScoredWeek) {
+    return latestScoredWeek;
+  }
+
+  const clampKey = `${season}:${latestScoredWeek}:${ceiling}`;
+  if (clampKey !== lastLoggedCompletedWeekClamp) {
+    lastLoggedCompletedWeekClamp = clampKey;
+    console.log(
+      `Week ${latestScoredWeek} has points but ESPN shows it still in progress; treating week ${ceiling} as the latest completed week.`
+    );
+  }
+  return ceiling;
+}
+
+// isWeekScored has the same blind spot; used where a playoff poller must know a
+// round is *over* (advancing to the next preview, the recap), not merely begun.
+async function isPlayoffWeekComplete(matchupsByWeek, week, season) {
+  if (!isWeekScored(matchupsByWeek, week)) {
+    return false;
+  }
+  const ceiling = await loadCompletedWeekCeiling(season);
+  return ceiling == null || week <= ceiling;
+}
+
 async function pollForWeeklyReport(weeklyReportState) {
   if (!config.weeklyReportsEnabled) {
     return;
@@ -909,10 +991,7 @@ async function pollForWeeklyReport(weeklyReportState) {
     startWeek: 1,
     endWeek: REGULAR_SEASON_END_WEEK,
   });
-  const latestCompletedWeek = findLatestCompletedWeek(
-    matchupsByWeek,
-    REGULAR_SEASON_END_WEEK
-  );
+  const latestCompletedWeek = await resolveLatestCompletedWeek(matchupsByWeek, season);
 
   if (latestCompletedWeek < 1) {
     return;
@@ -1021,10 +1100,7 @@ async function pollForPowerRankings(powerRankingsState) {
     startWeek: 1,
     endWeek: REGULAR_SEASON_END_WEEK,
   });
-  const latestCompletedWeek = findLatestCompletedWeek(
-    matchupsByWeek,
-    REGULAR_SEASON_END_WEEK
-  );
+  const latestCompletedWeek = await resolveLatestCompletedWeek(matchupsByWeek, season);
 
   // The rankings posted on a Thursday are for the upcoming slate, so the
   // display week is one past the last completed week. We post for Weeks 2-14
@@ -1112,10 +1188,7 @@ async function pollForDivisionRivalry(divisionRivalryState) {
     startWeek: 1,
     endWeek: REGULAR_SEASON_END_WEEK,
   });
-  const latestCompletedWeek = findLatestCompletedWeek(
-    matchupsByWeek,
-    REGULAR_SEASON_END_WEEK
-  );
+  const latestCompletedWeek = await resolveLatestCompletedWeek(matchupsByWeek, season);
 
   // Only post on the Wednesday right after a quarter boundary completes, not
   // every week.
@@ -1212,10 +1285,7 @@ async function pollForBigMatchups(bigMatchupsState) {
     startWeek: 1,
     endWeek: REGULAR_SEASON_END_WEEK,
   });
-  const latestCompletedWeek = findLatestCompletedWeek(
-    matchupsByWeek,
-    REGULAR_SEASON_END_WEEK
-  );
+  const latestCompletedWeek = await resolveLatestCompletedWeek(matchupsByWeek, season);
 
   // Previews the *upcoming* week's matchups, same displayWeek convention as
   // power rankings.
@@ -1307,9 +1377,9 @@ async function pollForPlayoffBracketReveal(playoffBracketState) {
     startWeek: 1,
     endWeek: REGULAR_SEASON_END_WEEK,
   });
-  const latestCompletedRegularSeasonWeek = findLatestCompletedWeek(
+  const latestCompletedRegularSeasonWeek = await resolveLatestCompletedWeek(
     regularSeasonMatchupsByWeek,
-    REGULAR_SEASON_END_WEEK
+    season
   );
 
   if (!isBracketTrustworthy(latestCompletedRegularSeasonWeek, REGULAR_SEASON_END_WEEK)) {
@@ -1424,9 +1494,9 @@ async function pollForPlayoffWeeklyReport(playoffWeeklyState) {
     startWeek: 1,
     endWeek: REGULAR_SEASON_END_WEEK,
   });
-  const latestCompletedRegularSeasonWeek = findLatestCompletedWeek(
+  const latestCompletedRegularSeasonWeek = await resolveLatestCompletedWeek(
     regularSeasonMatchupsByWeek,
-    REGULAR_SEASON_END_WEEK
+    season
   );
   if (!isBracketTrustworthy(latestCompletedRegularSeasonWeek, REGULAR_SEASON_END_WEEK)) {
     return;
@@ -1464,7 +1534,10 @@ async function pollForPlayoffWeeklyReport(playoffWeeklyState) {
     if (hasSentWeeklyReport(playoffWeeklyState, season, candidateWeek)) {
       continue;
     }
-    if (candidateWeek === playoffWeekStart || isWeekScored(playoffMatchupsByWeek, candidateWeek - 1)) {
+    if (
+      candidateWeek === playoffWeekStart ||
+      (await isPlayoffWeekComplete(playoffMatchupsByWeek, candidateWeek - 1, season))
+    ) {
       displayWeek = candidateWeek;
       break;
     }
@@ -1558,9 +1631,9 @@ async function pollForPlayoffRecap(playoffRecapState) {
     startWeek: 1,
     endWeek: REGULAR_SEASON_END_WEEK,
   });
-  const latestCompletedRegularSeasonWeek = findLatestCompletedWeek(
+  const latestCompletedRegularSeasonWeek = await resolveLatestCompletedWeek(
     regularSeasonMatchupsByWeek,
-    REGULAR_SEASON_END_WEEK
+    season
   );
   if (!isBracketTrustworthy(latestCompletedRegularSeasonWeek, REGULAR_SEASON_END_WEEK)) {
     return;
@@ -1571,7 +1644,7 @@ async function pollForPlayoffRecap(playoffRecapState) {
     startWeek: playoffWeekStart,
     endWeek: lastPlayoffWeek,
   });
-  if (!isWeekScored(playoffMatchupsByWeek, lastPlayoffWeek)) {
+  if (!(await isPlayoffWeekComplete(playoffMatchupsByWeek, lastPlayoffWeek, season))) {
     return;
   }
 
@@ -2127,7 +2200,10 @@ async function buildPowerRankingsTextForLeague(leagueId, league, seasonNote = nu
     startWeek: 1,
     endWeek: REGULAR_SEASON_END_WEEK,
   });
-  const latestCompletedWeek = findLatestCompletedWeek(matchupsByWeek, REGULAR_SEASON_END_WEEK);
+  const latestCompletedWeek = await resolveLatestCompletedWeek(
+    matchupsByWeek,
+    String(league?.season ?? "").trim()
+  );
   if (latestCompletedWeek < 1) {
     return null;
   }

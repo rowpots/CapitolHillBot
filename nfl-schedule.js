@@ -28,8 +28,12 @@ export function normalizeTeamAbbrev(abbrev) {
   return ABBREV_NORMALIZE[upper] ?? upper;
 }
 
-// Pure: ESPN scoreboard JSON → { season, week, games:[{ teams, state, kickoffMs }] }.
-// state is "pre" | "in" | "post"; kickoffMs is the game's start time (ms epoch).
+// Pure: ESPN scoreboard JSON →
+//   { season, seasonType, week, games:[{ teams, state, statusName, kickoffMs }] }.
+// state is "pre" | "in" | "post"; statusName is ESPN's STATUS_* name (kept so a
+// postponed/canceled game can be told apart from one that simply hasn't kicked
+// off); seasonType is 1 pre / 2 regular / 3 post; kickoffMs is the game's start
+// time (ms epoch).
 export function parseScoreboard(scoreboard) {
   const events = Array.isArray(scoreboard?.events) ? scoreboard.events : [];
   const games = [];
@@ -39,6 +43,9 @@ export function parseScoreboard(scoreboard) {
     const state = String(
       competition?.status?.type?.state ?? event?.status?.type?.state ?? ""
     ).toLowerCase();
+    const statusName = String(
+      competition?.status?.type?.name ?? event?.status?.type?.name ?? ""
+    ).toUpperCase();
     const kickoffMs = Date.parse(competition?.date ?? event?.date ?? "") || 0;
     const teams = (competition?.competitors ?? [])
       .map((competitor) => normalizeTeamAbbrev(competitor?.team?.abbreviation))
@@ -47,11 +54,12 @@ export function parseScoreboard(scoreboard) {
     if (teams.length === 0) {
       continue;
     }
-    games.push({ teams, state, kickoffMs });
+    games.push({ teams, state, statusName, kickoffMs });
   }
 
   return {
     season: String(scoreboard?.season?.year ?? "").trim(),
+    seasonType: Number(scoreboard?.season?.type) || null,
     week: Number(scoreboard?.week?.number) || null,
     games,
   };
@@ -67,6 +75,43 @@ export async function fetchSchedule({ fetchJson, season, week }) {
   }
   const scoreboard = await fetchJson(`${ESPN_SCOREBOARD_URL}?${params.toString()}`);
   return parseScoreboard(scoreboard);
+}
+
+// A game that will produce no further scoring this week. "post" is the normal
+// case; the STATUS_* names cover games ESPN never moves to "post" — a postponed
+// game with no new date would otherwise hold its week "in progress"
+// indefinitely and stall every Tuesday post behind it.
+const SETTLED_STATUS_NAMES = new Set([
+  "STATUS_CANCELED",
+  "STATUS_POSTPONED",
+  "STATUS_FORFEIT",
+]);
+
+export function isGameSettled(game) {
+  return game?.state === "post" || SETTLED_STATUS_NAMES.has(game?.statusName);
+}
+
+// The highest NFL week whose games have all finished, judged from ESPN's
+// current scoreboard. Sleeper's matchup `points` climb the moment a week's
+// first game kicks off, so "some roster has points" is not "the week is over":
+// a Wednesday opener (2026 Week 1) or Thanksgiving's 1 PM slate makes the
+// *current* week look complete by Thursday evening, and the Thursday pollers
+// then post a week early off one or two games. Returns null when ESPN has no
+// opinion (unknown week, postseason) so callers fall back to their own check.
+export function resolveCompletedWeekCeiling(schedule) {
+  const week = Number(schedule?.week);
+  if (!Number.isFinite(week) || week < 1) {
+    return null;
+  }
+  if (schedule.seasonType === 1) {
+    return 0; // preseason: nothing has been played yet
+  }
+  if (schedule.seasonType === 3) {
+    return null; // postseason: every regular-season week is behind us
+  }
+
+  const games = schedule.games ?? [];
+  return games.length > 0 && games.every(isGameSettled) ? week : week - 1;
 }
 
 function lastKickoffMs(schedule) {
