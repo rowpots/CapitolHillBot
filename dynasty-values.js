@@ -5,6 +5,7 @@ import {
   buildPlayerLookupKeys,
   clamp,
   formatOrdinal,
+  isCacheFresh,
   normalizePickLabel,
   normalizePlayerName,
   normalizeText,
@@ -15,7 +16,7 @@ import {
 
 const DYNASTYPROCESS_VALUES_URL =
   "https://raw.githubusercontent.com/dynastyprocess/data/master/files/values.csv";
-const VALUES_CACHE_TTL_MS = 24 * 60 * 60 * 1000;
+const VALUES_CACHE_TTL_MS = 48 * 60 * 60 * 1000;
 
 let inMemoryValueBook = null;
 
@@ -47,13 +48,19 @@ export async function loadDynastyValueBook({
 }) {
   const valueMode = resolveValueMode(preferredMode, league);
 
-  if (inMemoryValueBook && inMemoryValueBook.valueMode === valueMode) {
+  const cacheFilePath = path.join(cacheDir, "dynastyprocess-values.csv");
+
+  // The disk cache's age, not the process's uptime, decides when to refetch —
+  // otherwise a long-running bot would keep its startup values forever.
+  if (
+    inMemoryValueBook &&
+    inMemoryValueBook.valueMode === valueMode &&
+    (await isCacheFresh(cacheFilePath, VALUES_CACHE_TTL_MS))
+  ) {
     return inMemoryValueBook;
   }
 
   await fs.mkdir(cacheDir, { recursive: true });
-
-  const cacheFilePath = path.join(cacheDir, "dynastyprocess-values.csv");
   const csvText = await loadValuesCsv(cacheFilePath, logger);
   const rows = parseCsv(csvText);
 

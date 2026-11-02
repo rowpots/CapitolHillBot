@@ -106,16 +106,22 @@ export function clamp(value, minimum, maximum) {
   return Math.min(Math.max(value, minimum), maximum);
 }
 
-export async function readFreshCache(cacheFilePath, ttlMs) {
+export async function isCacheFresh(cacheFilePath, ttlMs) {
   try {
     const stats = await fs.stat(cacheFilePath);
-    const cacheAgeMs = Date.now() - stats.mtimeMs;
+    return Date.now() - stats.mtimeMs <= ttlMs;
+  } catch (error) {
+    return false;
+  }
+}
 
-    if (cacheAgeMs > ttlMs) {
-      return null;
-    }
+export async function readFreshCache(cacheFilePath, ttlMs) {
+  if (!(await isCacheFresh(cacheFilePath, ttlMs))) {
+    return null;
+  }
 
-    return fs.readFile(cacheFilePath, "utf8");
+  try {
+    return await fs.readFile(cacheFilePath, "utf8");
   } catch (error) {
     return null;
   }

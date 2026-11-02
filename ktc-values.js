@@ -5,6 +5,7 @@ import {
   buildPlayerLookupKeys,
   clamp,
   formatOrdinal,
+  isCacheFresh,
   normalizePickLabel,
   normalizePlayerName,
   normalizeText,
@@ -14,7 +15,7 @@ import {
 } from "./value-shared.js";
 
 const KTC_RANKINGS_URL = "https://keeptradecut.com/dynasty-rankings";
-const VALUES_CACHE_TTL_MS = 24 * 60 * 60 * 1000;
+const VALUES_CACHE_TTL_MS = 48 * 60 * 60 * 1000;
 const PLAYERS_JSON_ELEMENT_ID = "ktc-players";
 const PLAYERS_JSON_OPEN_TAG = new RegExp(
   `<script[^>]*\\bid=["']${PLAYERS_JSON_ELEMENT_ID}["'][^>]*>`,
@@ -32,13 +33,19 @@ export async function loadKtcValueBook({
 }) {
   const valueMode = resolveValueMode(preferredMode, league);
 
-  if (inMemoryValueBook && inMemoryValueBook.valueMode === valueMode) {
+  const cacheFilePath = path.join(cacheDir, "ktc-values.json");
+
+  // The disk cache's age, not the process's uptime, decides when to refetch —
+  // otherwise a long-running bot would keep its startup values forever.
+  if (
+    inMemoryValueBook &&
+    inMemoryValueBook.valueMode === valueMode &&
+    (await isCacheFresh(cacheFilePath, VALUES_CACHE_TTL_MS))
+  ) {
     return inMemoryValueBook;
   }
 
   await fs.mkdir(cacheDir, { recursive: true });
-
-  const cacheFilePath = path.join(cacheDir, "ktc-values.json");
   const envelope = await loadPlayersEnvelope(cacheFilePath, logger);
 
   if (!Array.isArray(envelope.players) || envelope.players.length === 0) {
