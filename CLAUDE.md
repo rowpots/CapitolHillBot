@@ -129,9 +129,9 @@ All gated by an `.env` toggle, dedup'd via per-`(season, week)` or `sentBySeason
   read by `trade-history.json`, awards, and the card pill) and a verdict phrase (`gradeLabel`, what
   the post prints: Heist / Came out ahead / Even swap / Came out behind / Got fleeced / Robbed
   blind). Letters were dropped from the post because the middle band made a *fair* trade — the ideal
-  outcome — read as a mediocre "C". Thresholds are shared; only the wording differs. Note
-  `chat-commands.js` `gradeFromScore` still has its **own 9-tier letter ladder** with different
-  thresholds for `!trade` — the two have never agreed. Player-name matching strips one trailing
+  outcome — read as a mediocre "C". Thresholds are shared; only the wording differs. The math lives
+  in `trade-grading.js` (`gradeSwap`), shared by the live posts and `!trade` so they can't drift.
+  Player-name matching strips one trailing
   generational suffix (`normalizePlayerName`); without it Sleeper's "Marvin Harrison" missed KTC's
   "Marvin Harrison Jr." and graded as **zero**, which also shrank the known-piece count and bought a
   phantom consolidation premium.
@@ -151,8 +151,12 @@ All gated by an `.env` toggle, dedup'd via per-`(season, week)` or `sentBySeason
 - **Chat commands**: signature = `sender::normalized-text` (no message IDs; messages ephemeral
   ~24h). **Primes** on first run (seeds visible commands as handled, no backlog reply). 200-entry
   ring. `buildMatchupPairings` (all) vs `filterMatchupPairings` (one team) are separate so "no
-  schedule this week" (fall through to prev season) ≠ "team not playing". `!trade` name resolver
-  skips empty-normalized keys (a bare "Jr" would else match everyone).
+  schedule this week" (fall through to prev season) ≠ "team not playing". `CHAT_COMMANDS_ALLOWED`
+  (comma list) limits which commands answer; prod runs `trade` only. `!trade` resolver tiers: exact →
+  last name → whole word → substring → typo (edit distance ≤2); highest KTC value wins unless the
+  runner-up is ≥50% of it, then it asks "Which Brown?". Nicknames in `PLAYER_NICKNAMES`. Picks via
+  `parsePickToken` ("27 early 2nd") priced with KTC's tier through `getPickValue({ tier })`. Any
+  unresolved name refuses the whole check — never grade a partial trade.
 - **Milestones**: detect once at week-final (inside `pollForWeeklyReport`), queue each with a
   daytime release slot, drip one per cycle. Playoff clinch/elim only from Week ≥8. First run
   `baselineMilestoneState` (silent). Record book seeded all-time from the chain.

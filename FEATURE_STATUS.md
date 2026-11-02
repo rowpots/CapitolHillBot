@@ -80,6 +80,8 @@ enabled and `DRY_RUN=true` around the trigger, or do a one-off test-chat send to
 - [ ] **Two-way chat commands (`!help/standings/record/power/matchup/trade/hof`)** —
   `npm run preview-chat-commands`. Verify live: priming on startup (no backlog reply), dedup ring,
   read-retry resilience, offseason→in-season standings source switch.
+  `!trade` rebuilt 2026-11-02 (flexible names/picks, live-engine grading); prod enables it alone via
+  `CHAT_COMMANDS_ALLOWED=trade`. Verify one real league-chat ask gets a reply within a poll.
 - [ ] **Rookie draft preview (once, 48h pre-draft)** — `npm run preview-draft-preview`. **Event-gated:**
   can only fully fire on the real draft countdown. Verify: Round 1 traded-pick resolution + rookie
   filter (`years_exp===0 && active===true`) against the actual 2026 class; countdown window gate.

@@ -152,6 +152,7 @@ async function buildCommandReply(parsed, leagueId) {
         playerIndex: buildPlayerNameIndex(playersById),
         valueBook,
         prefix,
+        totalRosters: Number(league?.total_rosters) || 12,
       });
     }
 

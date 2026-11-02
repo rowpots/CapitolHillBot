@@ -130,7 +130,10 @@ function buildValueBook(players, valueMode, sourceDate) {
     // only be precise, not accurate. Anything past round 4 has no KTC data and
     // returns null just like an unresolved DynastyProcess lookup (callers
     // already treat null as "unknown value").
-    getPickValue({ season, round, totalRosters = 12 }) {
+    // `tier` ("Early" | "Mid" | "Late") lets `!trade` price a pick the asker
+    // described; without it we project the middle of the round, since Sleeper's
+    // traded picks carry no slot.
+    getPickValue({ season, round, totalRosters = 12, tier = null }) {
       const numericRound = Number(round);
       if (!Number.isFinite(numericRound) || numericRound > 4) {
         return null;
@@ -141,8 +144,8 @@ function buildValueBook(players, valueMode, sourceDate) {
         1,
         12
       );
-      const tier = pickSlotToTier(projectedPickSlot);
-      const label = `${season} ${tier} ${formatOrdinal(numericRound)}`;
+      const resolvedTier = tier ?? pickSlotToTier(projectedPickSlot);
+      const label = `${season} ${resolvedTier} ${formatOrdinal(numericRound)}`;
       const key = normalizePickLabel(label);
 
       return pickLookup.has(key) ? pickLookup.get(key) : null;

@@ -14,6 +14,7 @@ import {
   STANDINGS_DIVIDER,
   truncateLabel,
 } from "./weekly-report.js";
+import { gradeSwap } from "./trade-grading.js";
 
 export const DEFAULT_COMMAND_PREFIX = "!";
 
@@ -26,7 +27,7 @@ export const COMMANDS = [
   { name: "record", usage: "record <team>", description: "A team's record + rank" },
   { name: "power", usage: "power", description: "Power rankings" },
   { name: "matchup", usage: "matchup [team]", description: "This week's matchups" },
-  { name: "trade", usage: "trade <a> for <b>", description: "Grade a hypothetical trade" },
+  { name: "trade", usage: "trade <a> for <b>", description: "Grade a hypothetical trade (players or picks)" },
   { name: "hof", usage: "hof", description: "All-time Hall of Fame" },
 ];
 
@@ -226,22 +227,29 @@ export function formatMatchupsMessage({ leagueName = "League", weekLabel, pairin
 
 // ---- !trade ---------------------------------------------------------------
 
-// Splits "!trade A, B for C" into { sideA: ["A","B"], sideB: ["C"] }. Accepts
-// " for ", "|", or "/" between the two sides and comma / "+" within a side.
+// Phone keyboards autocorrect ' and " into curly quotes, which would otherwise
+// make "Ja’Marr Chase" a different name from "Ja'Marr Chase".
+function straightenQuotes(text) {
+  return String(text ?? "").replace(/[‘’‛′]/g, "'").replace(/[“”″]/g, '"');
+}
+
+// Splits "!trade A, B for C" into { sideA: ["A","B"], sideB: ["C"] }. Between
+// the two sides it accepts "for", "vs", "versus", "|", " / ", "<>" or "↔";
+// within a side, commas, "+", "and" or "&".
 export function parseTradeCommand(argString) {
-  const raw = String(argString ?? "").trim();
+  const raw = straightenQuotes(argString).trim();
   if (!raw) {
     return null;
   }
 
-  const parts = raw.split(/\s+for\s+|\s*\|\s*|\s+\/\s+/i);
+  const parts = raw.split(/\s+(?:for|vs\.?|versus)\s+|\s*(?:\||<->|<>|↔)\s*|\s+\/\s+/i);
   if (parts.length !== 2) {
     return null;
   }
 
   const splitSide = (side) =>
     side
-      .split(/\s*,\s*|\s+\+\s+/)
+      .split(/\s*,\s*|\s*\+\s*|\s+(?:and|&)\s+/i)
       .map((name) => name.trim())
       .filter(Boolean);
 
@@ -251,6 +259,52 @@ export function parseTradeCommand(argString) {
     return null;
   }
   return { sideA, sideB };
+}
+
+const PICK_ROUND_WORDS = new Map([
+  ["1", 1], ["1st", 1], ["first", 1],
+  ["2", 2], ["2nd", 2], ["second", 2],
+  ["3", 3], ["3rd", 3], ["third", 3],
+  ["4", 4], ["4th", 4], ["fourth", 4],
+  ["5", 5], ["5th", 5], ["fifth", 5],
+]);
+
+// Reads a draft-pick mention: "2027 1st", "'27 early 2nd", "2028 round 1",
+// "late first". Returns null for anything that isn't purely a pick, so player
+// names never get swallowed. A missing year means the next rookie draft.
+export function parsePickToken(text, now = new Date()) {
+  const lowered = straightenQuotes(text).toLowerCase();
+  let rest = lowered.replace(/[.']/g, " ");
+
+  let tier = null;
+  rest = rest.replace(/\b(early|mid|middle|late)\b/, (match) => {
+    tier = match.startsWith("mid") ? "Mid" : match[0].toUpperCase() + match.slice(1);
+    return " ";
+  });
+
+  let season = null;
+  rest = rest.replace(/\b(?:20)?(2[5-9]|3[0-5])\b/, (match, yy) => {
+    season = 2000 + Number(yy);
+    return " ";
+  });
+
+  const words = rest
+    .split(/\s+/)
+    .filter((word) => word && !["round", "rounder", "rd", "pick", "picks", "rookie"].includes(word));
+  if (words.length !== 1 || !PICK_ROUND_WORDS.has(words[0])) {
+    return null;
+  }
+  // A bare digit ("2") only counts as a round when the word "round" is there.
+  if (/^\d$/.test(words[0]) && !/\b(round|rd)\b/.test(lowered)) {
+    return null;
+  }
+
+  if (season == null) {
+    // The rookie draft runs in May; after that, "a 1st" means next year's.
+    season = now.getMonth() >= 4 ? now.getFullYear() + 1 : now.getFullYear();
+  }
+
+  return { season, round: PICK_ROUND_WORDS.get(words[0]), tier };
 }
 
 // Builds a normalized-name -> [player, ...] index from Sleeper's players map for
@@ -287,7 +341,7 @@ export function buildPlayerNameIndex(playersById) {
 }
 
 function normalizePlayerName(name) {
-  return String(name)
+  return straightenQuotes(name)
     .toLowerCase()
     .replace(/[.'`]/g, "")
     .replace(/\b(jr|sr|ii|iii|iv|v)\b/g, "")
@@ -296,121 +350,289 @@ function normalizePlayerName(name) {
     .trim();
 }
 
-// Resolves a free-text name to a single player, preferring an exact normalized
-// match and, among same-name players, the one with the highest dynasty value
-// (so "Lamar Jackson" lands on the QB, not an obscure namesake).
+// When the second-best match is worth at least this share of the best one, the
+// name is genuinely ambiguous ("brown": A.J. vs Amon-Ra St.) and we ask rather
+// than guess. Below it, the star is almost certainly who was meant
+// ("allen" -> Josh, not Braelon, at ~36%).
+const AMBIGUOUS_VALUE_RATIO = 0.5;
+
+// Initials and nicknames people actually type, mapped to the full name.
+const PLAYER_NICKNAMES = new Map([
+  ["cmc", "christian mccaffrey"],
+  ["jsn", "jaxon smith njigba"],
+  ["arsb", "amon ra st brown"],
+  ["sun god", "amon ra st brown"],
+  ["btj", "brian thomas"],
+  ["mhj", "marvin harrison"],
+  ["kw3", "kenneth walker"],
+  ["ajb", "aj brown"],
+  ["jt", "jonathan taylor"],
+  ["tlaw", "trevor lawrence"],
+  ["cd", "ceedee lamb"],
+  ["mvs", "marquez valdes scantling"],
+]);
+
+// Resolves free text to one player. Tries, in order: the exact full name, a
+// last-name match, any whole-word match, a substring, then a typo-tolerant
+// match. Within the first tier that finds anyone, the most valuable player
+// wins unless a second one is close enough in value to be a real ambiguity.
+// Returns { player } | { ambiguous: [players] } | null.
 function resolvePlayer(name, index, valueBook) {
-  const key = normalizePlayerName(name);
-  if (!key) {
-    // A name that normalizes to nothing (e.g. just "Jr") would otherwise make
-    // the loose fallback's startsWith("") match every player.
+  const typed = normalizePlayerName(name);
+  const key = PLAYER_NICKNAMES.get(typed) ?? typed;
+  // A name that normalizes to nothing (e.g. just "Jr") or a single letter
+  // would match half the league.
+  if (key.length < 2) {
     return null;
   }
-  let candidates = index.get(key);
 
-  if (!candidates || candidates.length === 0) {
-    // Loose fallback: a unique key that starts with / contains the query.
-    const keys = [...index.keys()].filter((k) => k.startsWith(key) || k.includes(key));
+  const tiers = [
+    (k) => k === key,
+    (k) => k.endsWith(` ${key}`),
+    (k) => ` ${k} `.includes(` ${key} `),
+    (k) => k.includes(key),
+  ];
+  for (const matches of tiers) {
+    const keys = [...index.keys()].filter(matches);
     if (keys.length > 0) {
-      candidates = keys.flatMap((k) => index.get(k));
+      return pickBestCandidate(keys.flatMap((k) => index.get(k)), valueBook);
     }
   }
-  if (!candidates || candidates.length === 0) {
-    return null;
-  }
 
-  return candidates
-    .map((player) => ({ player, value: valueBook?.getPlayerValue(player) ?? null }))
-    .sort((a, b) => (b.value ?? -1) - (a.value ?? -1))[0].player;
+  const typoKeys = findTypoMatches(key, index);
+  return typoKeys.length
+    ? pickBestCandidate(typoKeys.flatMap((k) => index.get(k)), valueBook)
+    : null;
 }
 
-export function buildTradeEvaluationMessage({ argString, playerIndex, valueBook, prefix = DEFAULT_COMMAND_PREFIX }) {
-  const parsed = parseTradeCommand(argString);
-  if (!parsed) {
-    return `Usage: ${prefix}trade <players> for <players>  —  e.g. ${prefix}trade Lamar Jackson for Jayden Daniels`;
+function pickBestCandidate(candidates, valueBook) {
+  const ranked = candidates
+    .map((player) => ({ player, value: valueBook?.getPlayerValue(player) ?? 0 }))
+    .sort(
+      (a, b) =>
+        b.value - a.value || Number(Boolean(b.player.team)) - Number(Boolean(a.player.team))
+    );
+
+  const [best, runnerUp] = ranked;
+  if (best.value > 0 && runnerUp && runnerUp.value >= best.value * AMBIGUOUS_VALUE_RATIO) {
+    return {
+      ambiguous: ranked
+        .filter((entry) => entry.value >= best.value * AMBIGUOUS_VALUE_RATIO)
+        .slice(0, 3)
+        .map((entry) => entry.player),
+    };
   }
-
-  const sideA = resolveSide(parsed.sideA, playerIndex, valueBook);
-  const sideB = resolveSide(parsed.sideB, playerIndex, valueBook);
-
-  const unresolved = [...sideA.unresolved, ...sideB.unresolved];
-  if (sideA.players.length === 0 || sideB.players.length === 0) {
-    const missing = unresolved.length ? ` Couldn't find: ${unresolved.join(", ")}.` : "";
-    return `I couldn't read both sides of that trade.${missing} Try full player names.`;
-  }
-
-  const lines = ["⚖️ Trade Check"];
-  lines.push(dividerFor(lines[0]));
-  lines.push(formatTradeSide("Side 1", sideA));
-  lines.push(formatTradeSide("Side 2", sideB));
-  lines.push("");
-
-  const baseline = Math.max((sideA.total + sideB.total) / 2, 1);
-  // Each side ends up holding the *other* side's package, so Side 1's value
-  // swing is what it receives (sideB) minus what it gives (sideA). The side that
-  // gives less value comes out ahead.
-  const side1Score = (sideB.total - sideA.total) / baseline;
-  const grade1 = gradeFromScore(side1Score).grade;
-  const grade2 = gradeFromScore(-side1Score).grade;
-
-  const diff = Math.round(Math.abs(sideB.total - sideA.total));
-  if (diff <= baseline * 0.05) {
-    lines.push(`Dead even — ${formatOneDecimal(sideA.total)} vs ${formatOneDecimal(sideB.total)}. Grades ${grade1}/${grade2}.`);
-  } else {
-    const winner = sideA.total < sideB.total ? "Side 1" : "Side 2";
-    lines.push(`${winner} comes out ahead by ${diff.toLocaleString()} in ${valueBook?.source ?? "value"} value.`);
-    lines.push(`Grades — Side 1: ${grade1} · Side 2: ${grade2}`);
-  }
-
-  if (unresolved.length) {
-    lines.push("");
-    lines.push(`(Skipped unrecognized: ${unresolved.join(", ")})`);
-  }
-
-  return lines.join("\n");
+  return { player: best.player };
 }
 
-function resolveSide(names, playerIndex, valueBook) {
-  const players = [];
-  const unresolved = [];
-  let total = 0;
+// Closest names by edit distance, against both the full name and the last
+// name. Only near misses count: 2 edits, or 1 for short names.
+function findTypoMatches(key, index) {
+  const maxDistance = key.length < 6 ? 1 : 2;
+  let bestDistance = Infinity;
+  let bestKeys = [];
 
-  for (const name of names) {
-    const player = resolvePlayer(name, playerIndex, valueBook);
-    if (!player) {
-      unresolved.push(name);
+  for (const k of index.keys()) {
+    const lastName = k.split(" ").slice(1).join(" ");
+    const distance = Math.min(
+      levenshtein(key, k),
+      lastName ? levenshtein(key, lastName) : Infinity
+    );
+    if (distance > maxDistance || distance > bestDistance) {
       continue;
     }
-    const value = valueBook?.getPlayerValue(player) ?? 0;
-    total += value;
-    players.push({ player, value });
+    if (distance < bestDistance) {
+      bestDistance = distance;
+      bestKeys = [];
+    }
+    bestKeys.push(k);
   }
 
-  return { players, unresolved, total };
+  return bestKeys;
 }
 
-function formatTradeSide(label, side) {
-  const parts = side.players.map((entry) => {
-    const meta = [entry.player.position, entry.player.team].filter(Boolean).join("-");
-    const valueLabel = entry.value > 0 ? ` (${Math.round(entry.value).toLocaleString()})` : "";
-    return `${entry.player.displayName}${meta ? ` [${meta}]` : ""}${valueLabel}`;
+function levenshtein(a, b) {
+  if (Math.abs(a.length - b.length) > 2) {
+    return Infinity;
+  }
+  let previous = Array.from({ length: b.length + 1 }, (_, i) => i);
+  for (let i = 1; i <= a.length; i += 1) {
+    const current = [i];
+    for (let j = 1; j <= b.length; j += 1) {
+      current[j] = Math.min(
+        previous[j] + 1,
+        current[j - 1] + 1,
+        previous[j - 1] + (a[i - 1] === b[j - 1] ? 0 : 1)
+      );
+    }
+    previous = current;
+  }
+  return previous[b.length];
+}
+
+export function buildTradeEvaluationMessage({
+  argString,
+  playerIndex,
+  valueBook,
+  prefix = DEFAULT_COMMAND_PREFIX,
+  totalRosters = 12,
+  now = new Date(),
+}) {
+  const parsed = parseTradeCommand(argString);
+  if (!parsed) {
+    return [
+      'To check a trade, put "for" between the two sides:',
+      `${prefix}trade Bijan Robinson for Puka Nacua`,
+      `${prefix}trade jefferson and 2027 1st for chase`,
+    ].join("\n");
+  }
+
+  const context = { playerIndex, valueBook, totalRosters, now };
+  const sideA = resolveSide(parsed.sideA, context);
+  const sideB = resolveSide(parsed.sideB, context);
+
+  const ambiguous = [...sideA.ambiguous, ...sideB.ambiguous];
+  if (ambiguous.length) {
+    return ambiguous
+      .map(({ name, players }) => `Which ${titleCase(name)}? ${formatNameOptions(players)}`)
+      .concat("Add a first name and try again.")
+      .join("\n");
+  }
+
+  // Grading a partial trade would be confidently wrong, so a name we can't
+  // place stops the check instead of being skipped.
+  const unresolved = [...sideA.unresolved, ...sideB.unresolved];
+  if (unresolved.length) {
+    return `Couldn't find: ${unresolved.join(", ")}. Check the spelling or use the full name.`;
+  }
+
+  const knownValueCount = sideA.knownCount + sideB.knownCount;
+  const side1 = gradeSwap({
+    sentValue: sideA.total,
+    receivedValue: sideB.total,
+    sentCount: sideA.knownCount,
+    receivedCount: sideB.knownCount,
+    knownValueCount,
   });
-  return `${label}: ${parts.join(", ")}  =  ${formatOneDecimal(side.total)}`;
+  const side2 = gradeSwap({
+    sentValue: sideB.total,
+    receivedValue: sideA.total,
+    sentCount: sideB.knownCount,
+    receivedCount: sideA.knownCount,
+    knownValueCount,
+  });
+
+  const header = "⚖️ Trade Check";
+  const lines = [
+    formatTradeSide("Side 1 sends", sideA, side1.sentConsolidationBonus),
+    formatTradeSide("Side 2 sends", sideB, side1.receivedConsolidationBonus),
+    "",
+  ];
+
+  if (!knownValueCount) {
+    lines.push("None of these have a trade value, so I can't grade it.");
+  } else if (side1.gradeLabel === side2.gradeLabel) {
+    lines.push(`${side1.gradeLabel} — fair for both sides.`);
+  } else {
+    const winner = side1.netValue > 0 ? "Side 1" : "Side 2";
+    const margin = Math.abs(Math.round(side1.netValue));
+    lines.push(`${winner} wins by ${margin.toLocaleString()}.`);
+    lines.push(`Side 1: ${side1.gradeLabel} · Side 2: ${side2.gradeLabel}`);
+  }
+
+  const footer = formatValueSourceLine(valueBook);
+  if (footer) {
+    lines.push("", footer);
+  }
+
+  return [header, dividerFor(header), "", lines.join("\n")].join("\n");
 }
 
-// Same grade thresholds as the live trade engine's buildTradeGrade (index.js).
-// Duplicated here deliberately so the command stays self-contained until the
-// trade engine is extracted into its own module.
-function gradeFromScore(score) {
-  if (score >= 0.7) return { grade: "A+" };
-  if (score >= 0.45) return { grade: "A" };
-  if (score >= 0.25) return { grade: "A-" };
-  if (score >= 0.12) return { grade: "B+" };
-  if (score >= 0.05) return { grade: "B" };
-  if (score >= -0.05) return { grade: "C" };
-  if (score >= -0.12) return { grade: "C-" };
-  if (score >= -0.25) return { grade: "D" };
-  return { grade: "F" };
+function resolveSide(names, { playerIndex, valueBook, totalRosters, now }) {
+  const assets = [];
+  const unresolved = [];
+  const ambiguous = [];
+
+  for (const name of names) {
+    const pick = parsePickToken(name, now);
+    if (pick) {
+      const value = valueBook?.getPickValue({ ...pick, totalRosters }) ?? null;
+      const tierLabel = pick.tier ? `${pick.tier} ` : "";
+      assets.push({ label: `${pick.season} ${tierLabel}${formatPickRound(pick.round)}`, value });
+      continue;
+    }
+
+    const result = resolvePlayer(name, playerIndex, valueBook);
+    if (!result) {
+      unresolved.push(name);
+    } else if (result.ambiguous) {
+      ambiguous.push({ name, players: result.ambiguous });
+    } else {
+      const { player } = result;
+      const meta = [player.position, player.team].filter(Boolean).join("-");
+      assets.push({
+        label: `${player.displayName}${meta ? ` [${meta}]` : ""}`,
+        value: valueBook?.getPlayerValue(player) ?? null,
+      });
+    }
+  }
+
+  // Only valued assets count as pieces for the consolidation premium, the
+  // same rule the live trade posts use.
+  const known = assets.filter((asset) => asset.value > 0);
+  return {
+    assets,
+    unresolved,
+    ambiguous,
+    knownCount: known.length,
+    total: known.reduce((sum, asset) => sum + asset.value, 0),
+  };
+}
+
+function formatTradeSide(label, side, consolidationBonus) {
+  const parts = side.assets.map((asset) =>
+    asset.value > 0
+      ? `${asset.label} ${Math.round(asset.value).toLocaleString()}`
+      : `${asset.label} (no value)`
+  );
+  const bonus =
+    consolidationBonus > 0 ? ` + ${consolidationBonus.toLocaleString()} consolidation` : "";
+  const total = Math.round(side.total + consolidationBonus).toLocaleString();
+  return `${label}: ${parts.join(" · ")}${bonus} = ${total}`;
+}
+
+function formatNameOptions(players) {
+  const labels = players.map((player) =>
+    player.team ? `${player.displayName} (${player.team})` : player.displayName
+  );
+  return labels.length > 1
+    ? `${labels.slice(0, -1).join(", ")} or ${labels[labels.length - 1]}`
+    : labels[0];
+}
+
+function titleCase(text) {
+  return String(text).replace(/\b[a-z]/g, (letter) => letter.toUpperCase());
+}
+
+function formatPickRound(round) {
+  return ["1st", "2nd", "3rd", "4th", "5th"][round - 1] ?? `Round ${round}`;
+}
+
+function formatValueSourceLine(valueBook) {
+  if (!valueBook?.source) {
+    return null;
+  }
+  const format = valueBook.valueMode === "2qb" ? "superflex " : "";
+  const date = valueBook.sourceDate ? new Date(valueBook.sourceDate) : null;
+  const asOf =
+    date && !Number.isNaN(date.getTime())
+      ? ` as of ${date.toLocaleDateString("en-US", {
+          month: "short",
+          day: "numeric",
+          timeZone: "America/New_York",
+        })}`
+      : "";
+  return `${valueBook.source} ${format}values${asOf}`;
 }
 
 // A divider sized to the header but trimmed back, matching the other features'
