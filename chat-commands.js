@@ -49,6 +49,28 @@ export function parseCommand(text, prefix = DEFAULT_COMMAND_PREFIX) {
   return { name, args: parts, argString: parts.join(" ").trim() };
 }
 
+// Detects an "@bot" tag anywhere in a message. Returns { question } with the tag
+// stripped out, { question: "" } for a bare tag (the asker's next message is the
+// question), or null if no handle is tagged. Handles are matched case-
+// insensitively and may contain spaces (a Snapchat display name), so they're
+// regex-escaped; a trailing word boundary keeps "@capitolhillbots" from matching.
+export function parseMention(text, handles = []) {
+  const raw = String(text ?? "");
+  for (const handle of handles) {
+    const cleaned = String(handle ?? "").trim().replace(/^@/, "");
+    if (!cleaned) {
+      continue;
+    }
+    const escaped = cleaned.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    const pattern = new RegExp(`@\\s?${escaped}(?![\\w])[\\s:,!?.-]*`, "i");
+    if (pattern.test(raw)) {
+      const question = raw.replace(pattern, " ").replace(/\s+/g, " ").trim();
+      return { question };
+    }
+  }
+  return null;
+}
+
 // A stable per-message identity for dedupe. Snapchat exposes no message ids, so
 // (sender + normalized text) is the best available signature; the trade-off is
 // that the exact same command from the same person is answered once until it
@@ -618,7 +640,7 @@ function formatPickRound(round) {
   return ["1st", "2nd", "3rd", "4th", "5th"][round - 1] ?? `Round ${round}`;
 }
 
-function formatValueSourceLine(valueBook) {
+export function formatValueSourceLine(valueBook) {
   if (!valueBook?.source) {
     return null;
   }

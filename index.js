@@ -69,7 +69,19 @@ import {
   formatMatchupsMessage,
   formatStandingsMessage,
   parseCommand,
+  parseMention,
 } from "./chat-commands.js";
+import {
+  askClaude,
+  buildLeagueSnapshot,
+  buildSystemPrompt,
+  checkAiMentionAllowance,
+  createEmptyAiMentionState,
+  loadAiMentionConfig,
+  normalizeMemberName,
+  recordAiMentionNotice,
+  recordAiMentionUsage,
+} from "./ai-mention.js";
 import { liveScoringFeature } from "./live-scoring.js";
 import { sendAlert, pingHealthcheck } from "./alerts.js";
 
@@ -114,6 +126,7 @@ const DRAFT_RESULTS_STATE_FILE = path.join(
 );
 const HALL_OF_FAME_FILE = path.join(STATE_DIR, "hall-of-fame.json");
 const CHAT_COMMANDS_STATE_FILE = path.join(STATE_DIR, "chat-commands-state.json");
+const AI_MENTION_STATE_FILE = path.join(STATE_DIR, "ai-mention-state.json");
 const PLAYOFF_BRACKET_STATE_FILE = path.join(
   STATE_DIR,
   "playoff-bracket-state.json"
@@ -276,6 +289,9 @@ const config = {
   // live bot keep posting everything else to the league chat while live-scoring
   // messages go to the test chat for in-season verification. Blank = main chat.
   liveScoringChatId: process.env.LIVE_SCORING_CHAT_ID?.trim() ?? "",
+  // "@capitolhillbot <question>" -> Claude Haiku reply (ai-mention.js). Off by
+  // default; reads its own AI_MENTION_* knobs.
+  aiMention: loadAiMentionConfig(),
 };
 
 const bot = new SnapBot();
@@ -318,6 +334,11 @@ async function main() {
   const playoffWeeklyState = await loadPlayoffWeeklyState();
   const playoffRecapState = await loadPlayoffRecapState();
   const chatCommandsState = await loadChatCommandsState();
+  const aiMentionState = await loadAiMentionState();
+
+  if (config.aiMention.enabled && !config.aiMention.hasApiKey) {
+    console.warn("AI_MENTION_ENABLED is on but ANTHROPIC_API_KEY is blank; @mentions are disabled.");
+  }
 
   if (!config.dryRun) {
     await startSnapchatSession();
@@ -369,7 +390,7 @@ async function main() {
       await pollForDraftResultsSnapshot(draftResultsState);
       await pollForTrades(state);
       await sendPendingTradeHeadsUps(state);
-      await pollForChatCommands(chatCommandsState);
+      await pollForChatCommands(chatCommandsState, aiMentionState);
       await runFeatureModules();
 
       // Dead-man's-switch: only successful cycles ping, so healthchecks.io
@@ -1959,8 +1980,9 @@ async function pollForDraftResultsSnapshot(draftResultsState) {
 
 // Two-way chat commands. Reads the configured chat, parses any `!command`
 // messages from members, and replies by reusing the bot's existing builders.
-async function pollForChatCommands(chatCommandsState) {
-  if (!config.chatCommandsEnabled || config.dryRun) {
+async function pollForChatCommands(chatCommandsState, aiMentionState) {
+  const mentionsEnabled = config.aiMention.enabled && config.aiMention.hasApiKey;
+  if ((!config.chatCommandsEnabled && !mentionsEnabled) || config.dryRun) {
     return;
   }
 
@@ -1975,6 +1997,21 @@ async function pollForChatCommands(chatCommandsState) {
   } catch (error) {
     console.warn("Chat command read failed; will retry next cycle.");
     console.warn(error.message);
+    return;
+  }
+
+  if (mentionsEnabled) {
+    // Before commands: a reply here is this cycle's AI post, and it shares the
+    // handled ring, which the command pass below persists either way.
+    // Isolated so a mention failure can never cost the !commands their cycle.
+    try {
+      await answerAiMentions({ messages, chatId, chatCommandsState, aiMentionState });
+    } catch (error) {
+      console.warn("AI mention handling failed; will retry next cycle.");
+      console.warn(error.message);
+    }
+  }
+  if (!config.chatCommandsEnabled) {
     return;
   }
 
@@ -2037,6 +2074,199 @@ async function pollForChatCommands(chatCommandsState) {
 
   chatCommandsState.handledSignatures = Array.from(handled).slice(-200);
   await saveChatCommandsState(chatCommandsState);
+}
+
+// Finds "@capitolhillbot" questions in the chat read. Inline tags carry their
+// own question; a bare tag takes the same sender's *next* message as the
+// question. If that next message is another tag or a "!" command, the bare tag
+// is abandoned. Bare tags all share one text, so each is keyed by the message
+// just before it ("prev|sig"), which stays stable as old messages scroll out of
+// the read window or expire. The very first message in the window has no stable
+// predecessor (its key would change once its neighbour drops off and look new),
+// so a bare tag there is ignored.
+function collectAiMentions(messages) {
+  const isOwn = (message) => String(message.from).trim().toLowerCase() === "me";
+  const isTrigger = (message) =>
+    Boolean(parseCommand(message.text, config.chatCommandPrefix)) ||
+    Boolean(parseMention(message.text, config.aiMention.handles));
+
+  const mentions = [];
+  messages.forEach((message, index) => {
+    if (isOwn(message) || parseCommand(message.text, config.chatCommandPrefix)) {
+      return;
+    }
+    const mention = parseMention(message.text, config.aiMention.handles);
+    if (!mention) {
+      return;
+    }
+    const signature = commandSignature(message);
+    if (mention.question) {
+      mentions.push({ sender: message.from, question: mention.question, signature });
+      return;
+    }
+
+    if (index === 0) {
+      return;
+    }
+    const bareKey = `${commandSignature(messages[index - 1])}|${signature}`;
+    const followUp = messages
+      .slice(index + 1)
+      .find((later) => !isOwn(later) && later.from === message.from);
+    if (!followUp) {
+      mentions.push({ sender: message.from, bareKey, pending: true });
+    } else if (isTrigger(followUp)) {
+      mentions.push({ sender: message.from, bareKey, abandoned: true });
+    } else {
+      mentions.push({
+        sender: message.from,
+        question: String(followUp.text).trim(),
+        bareKey,
+        signature: `${bareKey}>>${commandSignature(followUp)}`,
+      });
+    }
+  });
+  return mentions;
+}
+
+// At most one AI reply per cycle (Snapchat drops back-to-back sends); further
+// questions stay unhandled and go out on later cycles.
+async function answerAiMentions({ messages, chatId, chatCommandsState, aiMentionState }) {
+  const mentions = collectAiMentions(messages);
+  const handled = new Set(chatCommandsState.handledSignatures);
+  const nowMs = Date.now();
+  const waitMs = config.aiMention.bareTagWaitSeconds * 1000;
+  const persist = async () => {
+    chatCommandsState.handledSignatures = Array.from(handled).slice(-200);
+    await saveChatCommandsState(chatCommandsState);
+    await saveAiMentionState(aiMentionState);
+  };
+
+  // First enabled cycle: everything already visible is history, not a question.
+  if (!aiMentionState.primed) {
+    for (const mention of mentions) {
+      if (mention.signature) handled.add(mention.signature);
+      if (mention.bareKey) aiMentionState.bareTagFirstSeen[mention.bareKey] = 0;
+    }
+    aiMentionState.primed = true;
+    await persist();
+    console.log(`AI mentions primed with ${mentions.length} existing tag(s); awaiting new ones.`);
+    return;
+  }
+
+  let changed = false;
+  let next = null;
+  for (const mention of mentions) {
+    if (mention.pending) {
+      if (!(mention.bareKey in aiMentionState.bareTagFirstSeen)) {
+        aiMentionState.bareTagFirstSeen[mention.bareKey] = nowMs;
+        changed = true;
+      }
+      continue;
+    }
+    if (mention.abandoned || handled.has(mention.signature)) {
+      continue;
+    }
+    // A follow-up that showed up after the bare tag's window (or a primed,
+    // pre-existing bare tag) is just chat, not a question.
+    const firstSeen = mention.bareKey ? aiMentionState.bareTagFirstSeen[mention.bareKey] : undefined;
+    if (firstSeen !== undefined && (firstSeen === 0 || nowMs - firstSeen > waitMs)) {
+      handled.add(mention.signature);
+      changed = true;
+      continue;
+    }
+    next = mention;
+    break;
+  }
+
+  if (next) {
+    handled.add(next.signature);
+    changed = true;
+    // Persist before calling out: if the API call or the Snapchat send throws,
+    // the question stays handled instead of being re-asked (and re-billed) on
+    // every cycle until a send succeeds.
+    await persist();
+    const allowance = checkAiMentionAllowance(aiMentionState, config.aiMention, next.sender);
+    if (!allowance.allowed) {
+      console.log(`AI mention from ${next.sender} skipped (${allowance.reason}).`);
+      if (allowance.notice) {
+        recordAiMentionNotice(aiMentionState, allowance.reason);
+        await sendChatMessage(allowance.notice, `AI mention ${allowance.reason} notice`, { chatId });
+      }
+    } else {
+      await replyToAiMention(next, chatId, aiMentionState);
+    }
+  }
+
+  // Forget bare-tag bookkeeping once its messages have certainly expired.
+  for (const [key, seenAt] of Object.entries(aiMentionState.bareTagFirstSeen)) {
+    if (seenAt !== 0 && nowMs - seenAt > 24 * 60 * 60 * 1000) {
+      delete aiMentionState.bareTagFirstSeen[key];
+      changed = true;
+    }
+  }
+
+  if (changed) {
+    await persist();
+  }
+}
+
+async function replyToAiMention(mention, chatId, aiMentionState) {
+  let snapshot = { text: "", teamBySender: new Map() };
+  try {
+    snapshot = await getAiMentionSnapshot();
+  } catch (error) {
+    console.warn(`AI mention: league snapshot failed (${error.message}); answering without it.`);
+  }
+
+  const result = await askClaude({
+    question: mention.question,
+    sender: mention.sender,
+    senderTeam: snapshot.teamBySender.get(normalizeMemberName(mention.sender)) ?? null,
+    systemPrompt: buildSystemPrompt({ snapshot: snapshot.text }),
+    maxOutputTokens: config.aiMention.maxOutputTokens,
+  });
+  recordAiMentionUsage(aiMentionState, mention.sender, result.costUsd);
+  await saveAiMentionState(aiMentionState);
+  console.log(
+    `AI mention from ${mention.sender}: $${result.costUsd.toFixed(5)} ` +
+      `(month $${aiMentionState.monthSpendUsd.toFixed(4)}, ${aiMentionState.dayCount} today).`
+  );
+
+  if (result.text) {
+    await sendChatMessage(`@${mention.sender} ${result.text}`, `AI reply to ${mention.sender}`, {
+      chatId,
+    });
+  }
+}
+
+let aiMentionSnapshotCache = { snapshot: null, builtAt: 0 };
+
+async function getAiMentionSnapshot() {
+  const ttlMs = config.aiMention.snapshotTtlMinutes * 60 * 1000;
+  if (aiMentionSnapshotCache.snapshot && Date.now() - aiMentionSnapshotCache.builtAt < ttlMs) {
+    return aiMentionSnapshotCache.snapshot;
+  }
+  const league = await fetchJson(`https://api.sleeper.app/v1/league/${config.sleeperLeagueId}`);
+  const [playersById, valueBook] = await Promise.all([
+    loadPlayersById().catch(() => null),
+    // Same source/mode as !trade and the live trade grades.
+    loadValueBook({
+      source: config.valueSource,
+      cacheDir: STATE_DIR,
+      preferredMode: config.dynastyValueMode,
+      league,
+      logger: console,
+    }).catch(() => null),
+  ]);
+  const snapshot = await buildLeagueSnapshot({
+    leagueId: config.sleeperLeagueId,
+    fetchJson,
+    playersById,
+    valueBook,
+    memberTeams: config.aiMention.memberTeams,
+  });
+  aiMentionSnapshotCache = { snapshot, builtAt: Date.now() };
+  return snapshot;
 }
 
 // Reading the chat depends on the target chat's row being rendered in the list,
@@ -4008,6 +4238,35 @@ async function saveChatCommandsState(state) {
   await fs.writeFile(
     CHAT_COMMANDS_STATE_FILE,
     JSON.stringify(serialized, null, 2),
+    "utf8"
+  );
+}
+
+async function loadAiMentionState() {
+  await fs.mkdir(STATE_DIR, { recursive: true });
+
+  try {
+    const fileContents = await fs.readFile(AI_MENTION_STATE_FILE, "utf8");
+    const parsed = parseJsonFile(fileContents);
+    return {
+      ...createEmptyAiMentionState(),
+      ...parsed,
+      primed: Boolean(parsed?.primed),
+      lastAskBySender: parsed?.lastAskBySender ?? {},
+      bareTagFirstSeen: parsed?.bareTagFirstSeen ?? {},
+    };
+  } catch (error) {
+    return { ...createEmptyAiMentionState(), primed: false };
+  }
+}
+
+async function saveAiMentionState(state) {
+  await fs.mkdir(STATE_DIR, { recursive: true });
+
+  const { updatedAt, ...rest } = state;
+  await fs.writeFile(
+    AI_MENTION_STATE_FILE,
+    JSON.stringify({ updatedAt: new Date().toISOString(), ...rest }, null, 2),
     "utf8"
   );
 }

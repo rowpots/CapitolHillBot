@@ -3,7 +3,6 @@
   "version": "1.0.0",
   "description": "A bot that automates snapchat ",
   "main": "index.js",
-  "devDependencies": {},
   "type": "module",
   "scripts": {
     "bot": "node index.js",
@@ -23,10 +22,12 @@
     "preview-hall-of-fame": "node preview-hall-of-fame.js",
     "preview-chat-commands": "node preview-chat-commands.js",
     "preview-live-scoring": "node preview-live-scoring.js",
-    "preview-roster-analysis": "node preview-roster-analysis.js"
+    "preview-roster-analysis": "node preview-roster-analysis.js",
+    "preview-ai-mention": "node preview-ai-mention.js"
   },
   "author": "Roger Rodrigues",
   "dependencies": {
+    "@anthropic-ai/sdk": "^1.4.0",
     "dotenv": "^16.4.5",
     "puppeteer": "^24.1.1",
     "puppeteer-extra": "^3.3.6",

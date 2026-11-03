@@ -87,6 +87,7 @@ All gated by an `.env` toggle, dedup'd via per-`(season, week)` or `sentBySeason
 | Awards ceremony | `awards.js` | season end (after recap) | `AWARDS_CEREMONY_ENABLED` | (in recap flow) |
 | Hall of Fame | `hall-of-fame.js` | season end (after awards) | `HALL_OF_FAME_ENABLED` | `hall-of-fame.json` |
 | Chat commands (`!`) | `chat-commands.js` | live, reads group chat | `CHAT_COMMANDS_ENABLED` | `chat-commands-state.json` |
+| AI @mentions | `ai-mention.js` | live, rides the chat-command read | `AI_MENTION_ENABLED` (default **false**) | `ai-mention-state.json` (+ shared chat-commands ring) |
 | Live in-game scoring | `live-scoring.js`, `nfl-schedule.js` | game windows (opt-in) | `LIVE_SCORING_ENABLED` (default **false**) | `live-scoring-state.json` |
 
 ## Non-obvious gotchas by feature (the landmines)
@@ -157,6 +158,16 @@ All gated by an `.env` toggle, dedup'd via per-`(season, week)` or `sentBySeason
   runner-up is ≥50% of it, then it asks "Which Brown?". Nicknames in `PLAYER_NICKNAMES`. Picks via
   `parsePickToken` ("27 early 2nd") priced with KTC's tier through `getPickValue({ tier })`. Any
   unresolved name refuses the whole check — never grade a partial trade.
+- **AI @mentions**: the only paid API call in the bot (Claude Haiku 5.5 via `@anthropic-ai/sdk`).
+  Spend guard in `ai-mention.js` (monthly $ from `usage`, daily count, per-sender cooldown) — keep
+  `AI_MENTION_MONTHLY_BUDGET_USD` under the Console limit. Runs inside `pollForChatCommands`
+  *before* the command pass, one reply per cycle, and persists the shared handled ring itself (the
+  command pass early-returns without saving when nothing's fresh). Bare tags share one text, so
+  they're keyed by the **preceding message** (`prev|sig`), stable as the read window slides; a bare
+  tag at window index 0 is ignored. Own `primed` flag so enabling it never answers old tags.
+  Snapshot (`buildLeagueSnapshot`, cached 30 min) uses the same `VALUE_SOURCE` value book as
+  `!trade` via `roster-analysis.js` (leaderboard + per-player values); `AI_MENTION_MEMBER_TEAMS`
+  maps Snapchat names → teams so the question carries "X (owns Team)".
 - **Milestones**: detect once at week-final (inside `pollForWeeklyReport`), queue each with a
   daytime release slot, drip one per cycle. Playoff clinch/elim only from Week ≥8. First run
   `baselineMilestoneState` (silent). Record book seeded all-time from the chain.

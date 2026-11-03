@@ -96,6 +96,15 @@ These are the important ones:
 - `CHAT_COMMANDS_ENABLED`: two-way `!commands` members can type in the chat, `true` or `false`, default `true`
 - `CHAT_COMMAND_PREFIX`: the character that starts a command, default `!`
 - `CHAT_COMMANDS_CHAT_ID`: which chat to listen + reply in; blank = the main group chat
+- `AI_MENTION_ENABLED`: answer `@capitolhillbot <question>` (or a bare tag, then the question as your next message) with a short Claude Haiku 5.5 reply grounded in standings, power rankings, this week's matchups, and rosters. `true` or `false`, default `false`. Listens in the same chat as `CHAT_COMMANDS_CHAT_ID`. Needs `ANTHROPIC_API_KEY`.
+- `ANTHROPIC_API_KEY`: Anthropic Console API key (console.anthropic.com → API Keys). Billed per use, separate from any Claude subscription; set a monthly spend limit in the Console as a backstop.
+- `AI_MENTION_MEMBER_TEAMS`: who in the chat owns which team, so "how's my team?" works — comma list of `SnapchatName=team`, where the right side is a Sleeper **username** (survives team renames) or team name, e.g. `Rowan=pottsey, Josh=JoshPT`. Snapchat name must match exactly how it shows on their messages. Unmatched entries log a warning and are skipped.
+- `AI_MENTION_HANDLES`: comma list of names that count as a tag, default `capitolhillbot` (add the bot's Snapchat display name if a tagged mention shows up as that)
+- `AI_MENTION_MONTHLY_BUDGET_USD`: the bot's own monthly spend cap, tracked from each reply's token usage; default `4` (keep it under the Console limit so the bot trips first and says so)
+- `AI_MENTION_DAILY_LIMIT`: questions answered per day (Eastern), default `60`
+- `AI_MENTION_COOLDOWN_SECONDS`: per-person gap between questions; asks inside it are ignored, default `60`
+- `AI_MENTION_BARE_TAG_WAIT_SECONDS`: how long a bare `@capitolhillbot` waits for the follow-up question, default `300`
+- `AI_MENTION_MAX_OUTPUT_TOKENS` (default `400`) / `AI_MENTION_SNAPSHOT_TTL_MINUTES` (league-data cache, default `30`)
 - `LIVE_SCORING_ENABLED`: master switch for live in-game posts (score snapshots + alerts), `true` or `false`, default `false` (these post during games and are noisier than the scheduled features, so they're opt-in)
 - `LIVE_SCORING_CHAT_ID`: optional separate chat for **live-scoring posts only** — blank = the main group chat. Set it to your `TEST_SNAPCHAT_GROUP_CHAT_ID` value to verify live scoring in the test chat during real games while the rest of the bot keeps posting to the league chat as normal. Leave blank (or point it at the main chat) to roll it out to the league.
 - `LIVE_SCORE_SNAPSHOTS_ENABLED`: scheduled in-game score snapshots, default `true` (only when `LIVE_SCORING_ENABLED`)
