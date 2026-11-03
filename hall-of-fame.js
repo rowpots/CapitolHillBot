@@ -255,6 +255,10 @@ export async function buildHallOfFameFromHistory({
 // team taken over by a new manager shows under the new manager, and a manager
 // who just renamed their team shows the new name. The userId hop here (roster
 // -> current owner -> user) is exactly what makes that work.
+function pluralize(count, noun) {
+  return `${count} ${noun}${count === 1 ? "" : "s"}`;
+}
+
 function formatFranchiseLabel(rosterId, ownerIdByRosterId, userLookup) {
   const ownerId = ownerIdByRosterId.get(String(rosterId));
   const user = ownerId ? userLookup.get(String(ownerId)) : null;
@@ -345,7 +349,10 @@ export function formatHallOfFameMessage({ leagueName, managers }) {
 
     return `${rank}. ${truncateLabel(manager.label, DEFAULT_TEAM_NAME_MAX_LENGTH)}${titleSuffix}\n   ${record} · ${formatOneDecimal(
       manager.pointsFor
-    )} PF · ${manager.playoffAppearances} playoff trips · ${manager.seasonsPlayed} seasons`;
+    )} PF · ${pluralize(manager.playoffAppearances, "playoff trip")} · ${pluralize(
+      manager.seasonsPlayed,
+      "season"
+    )}`;
   });
 
   return [headerLine, divider, "", lines.join("\n\n")].join("\n");
