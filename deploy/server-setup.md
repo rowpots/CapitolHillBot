@@ -71,10 +71,10 @@ npm ci          # also downloads Puppeteer's Chrome to ~/.cache/puppeteer
 
 ```bash
 sudo apt-get install -y ca-certificates fonts-liberation fonts-noto-color-emoji \
-  libasound2t64 libatk-bridge2.0-0 libatk1.0-0 libcups2 libdbus-1-3 libdrm2 \
-  libgbm1 libglib2.0-0 libnspr4 libnss3 libpango-1.0-0 libx11-6 libxcb1 \
-  libxcomposite1 libxdamage1 libxext6 libxfixes3 libxkbcommon0 libxrandr2 \
-  xdg-utils
+  libasound2t64 libatk-bridge2.0-0 libatk1.0-0 libatspi2.0-0 libcairo2 libcups2 \
+  libdbus-1-3 libdrm2 libgbm1 libglib2.0-0 libnspr4 libnss3 libpango-1.0-0 \
+  libpangocairo-1.0-0 libx11-6 libxcb1 libxcomposite1 libxdamage1 libxext6 \
+  libxfixes3 libxkbcommon0 libxrandr2 libxrender1 xdg-utils
 ```
 
 ## 6. Cutover from the Windows PC (order matters)

@@ -130,13 +130,11 @@ schedule — just re-run the preview if the data or value source changes.
 
 ## Tier 3 — Needs real live testing (do first)
 
-- [ ] **AI @mentions (`ai-mention.js`, built 2026-11-02, off by default)** — parser + spend guard
-  (monthly $ cap, daily cap, cooldown, one-time notices, rollover) checked offline; league snapshot
-  verified against live Sleeper data. **Never called the API yet** (no key at build time). Verify:
-  `npm run preview-ai-mention -- --ask "..."` with a key (reply quality + logged cost); one real
-  tag in the test chat (`CHAT_COMMANDS_CHAT_ID` = test chat) to see how Snapchat Web renders a
-  tagged mention (adjust `AI_MENTION_HANDLES`); bare tag + follow-up; cooldown; priming on first
-  enable answers nothing old; `.state/ai-mention-state.json` spend increments.
+- [ ] **AI @mentions (`ai-mention.js`) — LIVE in the league chat since 2026-11-03 (c952cfb)** —
+  parser + spend guard covered by `npm test`; preview calls confirmed `claude-haiku-5-5` at
+  ~$0.0008/question (~7.2K input tokens). Tag format confirmed: first live cycle primed 5 existing
+  `@capitolhillbot` tags. Still open: first real answered tag in the league chat, the bare-tag +
+  follow-up flow, and the cooldown live; check `.state/ai-mention-state.json` spend increments.
 
 Only validated against historical / simulated data. The live game-day behavior is genuinely
 unproven. **Plan: run the bot with `LIVE_SCORING_ENABLED=true` and `DRY_RUN=true` during a real

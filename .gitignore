@@ -4,3 +4,5 @@ screenshot.png
 *.cookies.json
 *-cookies.json
 .state/
+.env.*
+!.env.example
