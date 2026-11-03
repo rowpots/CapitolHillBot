@@ -76,36 +76,61 @@ describe("resolveCompletedWeekCeiling (ESPN)", () => {
 });
 
 describe("resolveCompletedWeekCeilingFromSleeperState (fallback)", () => {
-  // Real payload from GET /v1/state/nfl on Tue 2026-11-03, right after Week 8's MNF.
-  const tuesdayAfterWeek8 = {
+  // Real payload from GET /v1/state/nfl at ~11 AM ET Tue 2026-11-03, right after
+  // Week 8's MNF. The 2026 season opened Wednesday 2026-09-09.
+  const state = (overrides = {}) => ({
     week: 9,
     display_week: 8,
     season: "2026",
     season_type: "regular",
-  };
+    season_start_date: "2026-09-09",
+    ...overrides,
+  });
+  const ceiling = (s, iso, season = "2026") =>
+    resolveCompletedWeekCeilingFromSleeperState(s, season, new Date(iso));
 
-  it("treats the week before Sleeper's week as the last completed one", () => {
-    assert.equal(resolveCompletedWeekCeilingFromSleeperState(tuesdayAfterWeek8, "2026"), 8);
+  it("counts the just-finished week on Tuesday morning", () => {
+    assert.equal(ceiling(state(), "2026-11-03T16:00:00Z"), 8); // 11 AM ET
   });
 
-  it("blocks an in-progress Thanksgiving week from counting as complete", () => {
-    const thanksgiving = { ...tuesdayAfterWeek8, week: 13, display_week: 13 };
-    assert.equal(resolveCompletedWeekCeilingFromSleeperState(thanksgiving, "2026"), 12);
+  it("is on time for the 10 AM Tuesday report even if Sleeper hasn't bumped its week", () => {
+    assert.equal(ceiling(state({ week: 8 }), "2026-11-03T15:00:00Z"), 8); // 10 AM ET
   });
 
-  it("handles the Wednesday Week 1 opener and preseason", () => {
-    assert.equal(resolveCompletedWeekCeilingFromSleeperState({ ...tuesdayAfterWeek8, week: 1 }, "2026"), 0);
-    assert.equal(resolveCompletedWeekCeilingFromSleeperState({ season: "2026", season_type: "pre", week: 0 }, "2026"), 0);
+  it("doesn't count the week until MNF is over (before 4 AM Tuesday ET)", () => {
+    assert.equal(ceiling(state({ week: 8 }), "2026-11-03T02:00:00Z"), 7); // Mon 9 PM ET
+    assert.equal(ceiling(state({ week: 8 }), "2026-11-03T08:00:00Z"), 7); // Tue 3 AM ET
+    assert.equal(ceiling(state({ week: 8 }), "2026-11-03T10:00:00Z"), 8); // Tue 5 AM ET
   });
 
-  it("has no opinion in the postseason/offseason or with a bad payload", () => {
-    assert.equal(resolveCompletedWeekCeilingFromSleeperState({ season: "2026", season_type: "post", week: 2 }), null);
-    assert.equal(resolveCompletedWeekCeilingFromSleeperState({ season: "2026", season_type: "off" }), null);
+  it("blocks Thanksgiving's in-progress Week 12 from counting as complete", () => {
+    // Thu 2026-11-26, 7 PM ET: two Thanksgiving games already have points.
+    assert.equal(ceiling(state({ week: 12, display_week: 12 }), "2026-11-27T00:00:00Z"), 11);
+  });
+
+  it("handles the Wednesday Week 1 opener and the first Tuesday after it", () => {
+    assert.equal(ceiling(state({ week: 1, display_week: 1 }), "2026-09-10T23:00:00Z"), 0);
+    assert.equal(ceiling(state({ week: 2, display_week: 1 }), "2026-09-15T14:00:00Z"), 1);
+  });
+
+  it("never runs ahead of Sleeper's own week", () => {
+    // Calendar says 8 are done, but a lagging/odd Sleeper week of 5 wins.
+    assert.equal(ceiling(state({ week: 5 }), "2026-11-03T16:00:00Z"), 5);
+  });
+
+  it("falls back to week - 1 without a usable season start date", () => {
+    assert.equal(ceiling(state({ season_start_date: undefined }), "2026-11-03T16:00:00Z"), 8);
+  });
+
+  it("handles preseason, postseason, offseason, and bad payloads", () => {
+    assert.equal(ceiling({ season: "2026", season_type: "pre", week: 0 }, "2026-08-20T12:00:00Z"), 0);
+    assert.equal(ceiling({ season: "2026", season_type: "post", week: 2 }, "2027-01-20T12:00:00Z"), null);
+    assert.equal(ceiling({ season: "2026", season_type: "off" }, "2027-03-01T12:00:00Z"), null);
     assert.equal(resolveCompletedWeekCeilingFromSleeperState(null), null);
   });
 
   it("treats a past league season as fully played and a future one as unplayed", () => {
-    assert.equal(resolveCompletedWeekCeilingFromSleeperState(tuesdayAfterWeek8, "2025"), null);
-    assert.equal(resolveCompletedWeekCeilingFromSleeperState(tuesdayAfterWeek8, "2027"), 0);
+    assert.equal(ceiling(state(), "2026-11-03T16:00:00Z", "2025"), null);
+    assert.equal(ceiling(state(), "2026-11-03T16:00:00Z", "2027"), 0);
   });
 });

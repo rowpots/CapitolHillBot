@@ -108,10 +108,12 @@ All gated by an `.env` toggle, dedup'd via per-`(season, week)` or `sentBySeason
   1 PM slate) reads as *complete* on Thursday evening — which is how a "Week 2" power rankings went
   out on Week 1 TNF. Every poller now goes through `resolveLatestCompletedWeek` (`index.js`), which
   clamps to the ESPN completed-week ceiling (`resolveCompletedWeekCeiling`, `nfl-schedule.js`).
-  ESPN 403s intermittently → falls back to Sleeper `/state/nfl` `week - 1`
-  (`resolveCompletedWeekCeilingFromSleeperState`; Sleeper bumps `week` right after MNF); both down →
-  old heuristic. ESPN down ≥2h → Discord alert `espn-scoreboard`. Never spoof headers to get past
-  ESPN's block. Playoff round *advances* use `isPlayoffWeekComplete`; the
+  ESPN 403s intermittently → falls back to `resolveCompletedWeekCeilingFromSleeperState`: weeks
+  counted off the calendar (one more done each Tuesday 4 AM ET after Sleeper's
+  `season_start_date`), capped at Sleeper's `week`. Calendar, not Sleeper's `week - 1`, because
+  when Sleeper bumps `week` on Tuesday is undocumented and the weekly report gates at 10 AM
+  Tuesday. Both down → old heuristic. ESPN down ≥2h → Discord alert `espn-scoreboard`. Never spoof
+  headers to get past ESPN's block. Playoff round *advances* use `isPlayoffWeekComplete`; the
   playoff *baseline* `isWeekScored` checks intentionally stay "any points" (a round that has merely
   begun already makes the previous preview stale).
 - **Big matchups**: needs a minute-granular gate (`isWeekdayAtOrAfterTimeInEastern`) for the ~30-min

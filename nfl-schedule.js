@@ -115,13 +115,17 @@ export function resolveCompletedWeekCeiling(schedule) {
 }
 
 // Fallback ceiling from Sleeper's GET /state/nfl, for when ESPN is unreachable
-// (it 403s intermittently). Sleeper bumps `week` right after Monday Night
-// Football -- on Tue 2026-11-03 it read week 9 / display_week 8 -- so the week
-// before `week` is the last one that's over: Tuesday's recap of week N sees N,
-// and Thanksgiving Thursday (week 13 in progress) sees 12. Coarser than ESPN (a
-// postponed game can't hold a week open), which is why ESPN stays primary.
+// (it 403s intermittently). Counted off the calendar rather than trusting when
+// Sleeper bumps `week`: every NFL week ends with Monday Night Football, so from
+// 4 AM ET each Tuesday after `season_start_date` one more week is over. That
+// keeps the Tuesday 10 AM weekly report on time even if Sleeper's counter lags
+// (it read week 9 / display_week 8 by 11 AM on Tue 2026-11-03, but when it flips
+// is undocumented). Sleeper's `week` still caps the answer, so a calendar quirk
+// can never run ahead of Sleeper's own week. Thanksgiving Thursday 2026-11-26
+// (week 12 in progress) -> 11. Coarser
+// than ESPN (a postponed game can't hold a week open), so ESPN stays primary.
 // Same contract as resolveCompletedWeekCeiling: null = no opinion.
-export function resolveCompletedWeekCeilingFromSleeperState(state, leagueSeason = null) {
+export function resolveCompletedWeekCeilingFromSleeperState(state, leagueSeason = null, now = new Date()) {
   const nflSeason = Number(state?.season);
   const season = Number(leagueSeason);
   if (Number.isFinite(season) && Number.isFinite(nflSeason) && season !== nflSeason) {
@@ -137,7 +141,45 @@ export function resolveCompletedWeekCeilingFromSleeperState(state, leagueSeason 
   }
 
   const week = Number(state?.week);
-  return Number.isFinite(week) && week >= 1 ? week - 1 : null;
+  if (!Number.isFinite(week) || week < 1) {
+    return null;
+  }
+  const byCalendar = countTuesdaysSinceSeasonStart(state?.season_start_date, now);
+  return byCalendar == null ? week - 1 : Math.min(byCalendar, week);
+}
+
+const DAY_MS = 24 * 60 * 60 * 1000;
+const WEEK_ROLLOVER_HOUR_ET = 4; // MNF is over well before 4 AM Tuesday
+
+// Tuesdays (at 4 AM ET) strictly after the season's first game, up to `now`.
+// Dates are compared as Eastern calendar days pinned to UTC noon, so DST and the
+// server's time zone don't matter. null if the start date is missing/invalid.
+function countTuesdaysSinceSeasonStart(seasonStartDate, now) {
+  const start = Date.parse(`${seasonStartDate}T12:00:00Z`);
+  if (!Number.isFinite(start)) {
+    return null;
+  }
+  const daysUntilTuesday = (2 - new Date(start).getUTCDay() + 7) % 7 || 7;
+  const firstTuesday = start + daysUntilTuesday * DAY_MS;
+
+  const parts = Object.fromEntries(
+    new Intl.DateTimeFormat("en-US", {
+      timeZone: "America/New_York",
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit",
+      hour: "2-digit",
+      hourCycle: "h23",
+    })
+      .formatToParts(now)
+      .map((part) => [part.type, part.value])
+  );
+  let today = Date.parse(`${parts.year}-${parts.month}-${parts.day}T12:00:00Z`);
+  if (Number(parts.hour) < WEEK_ROLLOVER_HOUR_ET) {
+    today -= DAY_MS; // before 4 AM counts as the previous day
+  }
+
+  return today < firstTuesday ? 0 : Math.floor((today - firstTuesday) / (7 * DAY_MS)) + 1;
 }
 
 function lastKickoffMs(schedule) {
