@@ -6,6 +6,7 @@
   "type": "module",
   "scripts": {
     "bot": "node index.js",
+    "test": "node --test \"test/*.test.js\"",
     "login": "node login.js",
     "refresh-cookies": "node refresh-cookies.js",
     "test-trade": "node test-trade.js",
