@@ -56,7 +56,11 @@ import {
   isBracketTrustworthy,
   isWeekScored,
 } from "./playoffs.js";
-import { fetchSchedule, resolveCompletedWeekCeiling } from "./nfl-schedule.js";
+import {
+  fetchSchedule,
+  resolveCompletedWeekCeiling,
+  resolveCompletedWeekCeilingFromSleeperState,
+} from "./nfl-schedule.js";
 import {
   buildHelpMessage,
   buildMatchupPairings,
@@ -920,7 +924,12 @@ async function pollForTrades(state) {
 
 let currentNflScheduleCache = { fetchedAt: 0, schedule: null };
 let currentNflScheduleWarned = false;
+let sleeperNflStateCache = { fetchedAt: 0, state: null };
 let lastLoggedCompletedWeekClamp = "";
+// When the current ESPN outage began (0 = ESPN healthy). ESPN 403s come and go
+// on their own, so only an outage this long is worth a Discord alert.
+let espnOutageSince = 0;
+const ESPN_OUTAGE_ALERT_AFTER_MS = 2 * 60 * 60 * 1000;
 
 async function loadCurrentNflSchedule() {
   const now = Date.now();
@@ -935,25 +944,58 @@ async function loadCurrentNflSchedule() {
     const schedule = await fetchSchedule({ fetchJson });
     currentNflScheduleCache = { fetchedAt: now, schedule };
     currentNflScheduleWarned = false;
+    espnOutageSince = 0;
     return schedule;
   } catch (error) {
     if (!currentNflScheduleWarned) {
       currentNflScheduleWarned = true;
       console.warn(
-        `ESPN scoreboard unavailable; completed-week detection falls back to matchup points alone. ${describeError(error)}`
+        `ESPN scoreboard unavailable; completed-week detection falls back to Sleeper's NFL week. ${describeError(error)}`
+      );
+    }
+    espnOutageSince ||= now;
+    if (now - espnOutageSince >= ESPN_OUTAGE_ALERT_AFTER_MS) {
+      await sendAlert(
+        "espn-scoreboard",
+        `SnapBot: ESPN scoreboard has been unreachable for ${Math.round(
+          (now - espnOutageSince) / 3_600_000
+        )}h (${describeError(error)}). Completed-week detection is using Sleeper's NFL week instead.`,
+        { cooldownMs: 24 * 60 * 60 * 1000 }
       );
     }
     return null;
   }
 }
 
+// Sleeper's GET /state/nfl, cached like the ESPN schedule. Only read when ESPN
+// is down; null when Sleeper is down too.
+async function loadSleeperNflState() {
+  const now = Date.now();
+  if (
+    sleeperNflStateCache.state &&
+    now - sleeperNflStateCache.fetchedAt < COMPLETED_WEEK_CEILING_TTL_MS
+  ) {
+    return sleeperNflStateCache.state;
+  }
+  try {
+    const state = await fetchJson("https://api.sleeper.app/v1/state/nfl");
+    sleeperNflStateCache = { fetchedAt: now, state };
+    return state;
+  } catch (error) {
+    console.warn(`Sleeper NFL state unavailable too; using matchup points alone. ${describeError(error)}`);
+    return null;
+  }
+}
+
 // Last regular-season week ESPN says has finished, or null for "no opinion".
 // A league from a past season (the !power fallback) is fully played; one from
-// a season that hasn't started has nothing complete.
+// a season that hasn't started has nothing complete. ESPN down -> Sleeper's
+// week counter (coarser, but enough to stop a Thursday-night early post).
 async function loadCompletedWeekCeiling(season) {
   const schedule = await loadCurrentNflSchedule();
   if (!schedule) {
-    return null;
+    const sleeperState = await loadSleeperNflState();
+    return sleeperState ? resolveCompletedWeekCeilingFromSleeperState(sleeperState, season) : null;
   }
 
   const leagueSeason = Number(season);
@@ -968,7 +1010,8 @@ async function loadCompletedWeekCeiling(season) {
 // is wrong whenever a week's first game kicks off before a poller's gate — the
 // 2026 Wednesday opener had Week 1 looking complete by Thursday 7 PM, so the
 // power rankings posted "Week 2" off a single game. Clamp it to the last week
-// ESPN has actually finished. Without ESPN it degrades to the old heuristic.
+// ESPN has actually finished (Sleeper's week counter when ESPN is down; the old
+// heuristic only if both are).
 async function resolveLatestCompletedWeek(matchupsByWeek, season) {
   const latestScoredWeek = findLatestCompletedWeek(matchupsByWeek, REGULAR_SEASON_END_WEEK);
   const ceiling = await loadCompletedWeekCeiling(season);
@@ -980,7 +1023,7 @@ async function resolveLatestCompletedWeek(matchupsByWeek, season) {
   if (clampKey !== lastLoggedCompletedWeekClamp) {
     lastLoggedCompletedWeekClamp = clampKey;
     console.log(
-      `Week ${latestScoredWeek} has points but ESPN shows it still in progress; treating week ${ceiling} as the latest completed week.`
+      `Week ${latestScoredWeek} has points but the NFL schedule shows it still in progress; treating week ${ceiling} as the latest completed week.`
     );
   }
   return ceiling;

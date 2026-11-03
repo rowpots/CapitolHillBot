@@ -114,6 +114,32 @@ export function resolveCompletedWeekCeiling(schedule) {
   return games.length > 0 && games.every(isGameSettled) ? week : week - 1;
 }
 
+// Fallback ceiling from Sleeper's GET /state/nfl, for when ESPN is unreachable
+// (it 403s intermittently). Sleeper bumps `week` right after Monday Night
+// Football -- on Tue 2026-11-03 it read week 9 / display_week 8 -- so the week
+// before `week` is the last one that's over: Tuesday's recap of week N sees N,
+// and Thanksgiving Thursday (week 13 in progress) sees 12. Coarser than ESPN (a
+// postponed game can't hold a week open), which is why ESPN stays primary.
+// Same contract as resolveCompletedWeekCeiling: null = no opinion.
+export function resolveCompletedWeekCeilingFromSleeperState(state, leagueSeason = null) {
+  const nflSeason = Number(state?.season);
+  const season = Number(leagueSeason);
+  if (Number.isFinite(season) && Number.isFinite(nflSeason) && season !== nflSeason) {
+    return season < nflSeason ? null : 0; // past league: fully played; future: nothing yet
+  }
+
+  const seasonType = String(state?.season_type ?? "").toLowerCase();
+  if (seasonType === "pre") {
+    return 0;
+  }
+  if (seasonType !== "regular") {
+    return null; // post / off: no in-season week to guard
+  }
+
+  const week = Number(state?.week);
+  return Number.isFinite(week) && week >= 1 ? week - 1 : null;
+}
+
 function lastKickoffMs(schedule) {
   return (schedule?.games ?? []).reduce((max, game) => Math.max(max, game.kickoffMs), 0);
 }
