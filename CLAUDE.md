@@ -10,6 +10,8 @@ engineering map — keep it lean.
 
 - Always run from this `SnapBot/` dir (`.env` + `dotenv` load from cwd; use `npm --prefix SnapBot
   run <script>` from the parent).
+- `npm test` — `node:test` suite over the pure modules (`test/*.test.js`). The script's explicit
+  glob matters: node's default discovery matches `test-*.js` and would run `test-trade.js`.
 - `npm run bot` — live loop (`index.js`). `npm run test-trade` — queue a fake trade for an
   *already-running* bot (writes a `.state/` trigger; no Sleeper call).
 - Dry run of the live path: `$env:DRY_RUN='true'; $env:RUN_ONCE='true'; node index.js`.
@@ -18,8 +20,12 @@ engineering map — keep it lean.
 
 ## Key files
 
-- `index.js` — live loop: poll Sleeper, grade trades, review-window send queue (+ `!veto`), and
-  call every `pollForX` + `runFeatureModules()`.
+- `index.js` — live loop: poll Sleeper, review-window send queue (+ `!veto`), runtime/trade-history
+  state, and call every `pollForX` + `runFeatureModules()`.
+- `trade-analysis.js` — the trade engine (ledger, grades, verdict/roast, text post), extracted from
+  index.js; roast settings come in via options. Math in `trade-grading.js`.
+- `state-store.js` — `STATE_DIR` + load/save (and has/mark helpers) for every per-feature
+  `.state/*.json` file. `runtime-state.json` and `trade-history.json` stay in index.js.
 - `weekly-report.js` — standings, Monte Carlo playoff odds, weekly recap, power rankings, **and the
   shared label/pairing/ET-time helpers** (`formatRosterLabel`, `normalizeWeekEntries`,
   `groupWeekEntriesByMatchup`, `getEasternDateParts`, `isWeekdayAtOrAfterTimeInEastern`, …) reused
@@ -101,8 +107,11 @@ All gated by an `.env` toggle, dedup'd via per-`(season, week)` or `sentBySeason
   week whose first game kicks off before a poller gate (the 2026 Wednesday opener, the Thanksgiving
   1 PM slate) reads as *complete* on Thursday evening — which is how a "Week 2" power rankings went
   out on Week 1 TNF. Every poller now goes through `resolveLatestCompletedWeek` (`index.js`), which
-  clamps to the ESPN completed-week ceiling (`resolveCompletedWeekCeiling`, `nfl-schedule.js`; ESPN
-  down → old heuristic, logged once). Playoff round *advances* use `isPlayoffWeekComplete`; the
+  clamps to the ESPN completed-week ceiling (`resolveCompletedWeekCeiling`, `nfl-schedule.js`).
+  ESPN 403s intermittently → falls back to Sleeper `/state/nfl` `week - 1`
+  (`resolveCompletedWeekCeilingFromSleeperState`; Sleeper bumps `week` right after MNF); both down →
+  old heuristic. ESPN down ≥2h → Discord alert `espn-scoreboard`. Never spoof headers to get past
+  ESPN's block. Playoff round *advances* use `isPlayoffWeekComplete`; the
   playoff *baseline* `isWeekScored` checks intentionally stay "any points" (a round that has merely
   begun already makes the previous preview stale).
 - **Big matchups**: needs a minute-granular gate (`isWeekdayAtOrAfterTimeInEastern`) for the ~30-min
